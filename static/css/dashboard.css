@@ -1,0 +1,115 @@
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: bold;
+    margin: 2px 0;
+}
+.badge-green {
+    background: #c8e6c9;
+    color: #256029;
+    border: 1px solid #81c784;
+}
+.badge-red {
+    background: #ffcdd2;
+    color: #b71c1c;
+    border: 1px solid #e57373;
+}
+.badge-yellow {
+    background: #fff9c4;
+    color: #bfa600;
+    border: 1px solid #ffe082;
+}
+.badge-gray {
+    background: #e0e0e0;
+    color: #424242;
+    border: 1px solid #bdbdbd;
+}
+
+.na {
+    background: #f5f5f5 !important;
+    color: #888;
+}
+
+.threshold-panel {
+    background: #f4f8fb;
+    border: 1px solid #b3c6d4;
+    border-radius: 8px;
+    padding: 16px 12px 8px 12px;
+    margin-bottom: 18px;
+    max-width: 700px;
+}
+.threshold-title {
+    font-size: 16px;
+    font-weight: bold;
+    margin-bottom: 8px;
+    color: #1976d2;
+}
+.threshold-fields label {
+    margin-right: 18px;
+    font-size: 13px;
+}
+.threshold-fields input {
+    width: 50px;
+    margin-left: 4px;
+    margin-right: 8px;
+    padding: 2px 4px;
+    font-size: 13px;
+}
+.threshold-fields button {
+    margin-left: 8px;
+    padding: 4px 12px;
+    font-size: 13px;
+    border-radius: 4px;
+    border: 1px solid #1976d2;
+    background: #e3f2fd;
+    color: #1976d2;
+    cursor: pointer;
+}
+.threshold-fields button:hover {
+    background: #bbdefb;
+}
+
+body { 
+    font-family: Arial, sans-serif; 
+    margin: 2em; 
+}
+
+table { 
+    border-collapse: collapse; 
+    width: 100%; 
+    font-size: 12px; 
+}
+
+th, td { 
+    border: 1px solid #ccc; 
+    padding: 6px; 
+    text-align: center; 
+}
+
+th { 
+    background: #f4f4f4; 
+}
+
+.ok { 
+    background: #c8e6c9; 
+}
+
+.fail { 
+    background: #ffcdd2; 
+}
+
+.subscription-header { 
+    background: #e3f2fd; 
+    font-weight: bold; 
+}
+
+.threshold { 
+    font-size: 10px; 
+    color: #666; 
+}
+
+.value { 
+    font-weight: bold; 
+} 

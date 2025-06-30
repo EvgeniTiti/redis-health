@@ -1,0 +1,6 @@
+throughput_threshold: 0.8  # 80% of configured throughput
+memory_threshold: 0.8      # 80% of memory limit
+cpu_threshold: 0.6         # 60% of CPU
+latency_threshold_ms: 3    # 3 milliseconds 
+prometheus_server_url: http://52.1.102.113:9090
+prometheus_query_period: 1h

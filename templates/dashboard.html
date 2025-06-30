@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Redis DB Health Dashboard</title>
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+<body>
+    <h1>Redis Database Health Dashboard</h1>
+    <div id="threshold-controls" style="margin-bottom: 1em;"></div>
+    <div style="margin-bottom: 1em;">
+        <label for="time-range-select"><b>Time Frame:</b></label>
+        <select id="time-range-select" onchange="onTimeRangeChange()">
+            <option value="5m">Last 5 minutes</option>
+            <option value="15m">Last 15 minutes</option>
+            <option value="30m">Last 30 minutes</option>
+            <option value="1h">Last 1 hour</option>
+            <option value="3h">Last 3 hours</option>
+            <option value="6h">Last 6 hours</option>
+            <option value="12h">Last 12 hours</option>
+            <option value="24h">Last 24 hours</option>
+            <option value="2d">Last 2 days</option>
+            <option value="absolute">Absolute...</option>
+        </select>
+        <div id="absolute-time-range" style="display:none; margin-top:8px;">
+            <label>From: <input type="datetime-local" id="abs-from"></label>
+            <label>To: <input type="datetime-local" id="abs-to"></label>
+            <button onclick="applyAbsoluteTimeRange()">Apply time range</button>
+        </div>
+    </div>
+    <button onclick="loadData()">Refresh</button>
+    <table id="metricsTable">
+        <thead>
+            <tr>
+                <th>Subscription Name</th>
+                <th>Database</th>
+                <th>Throughput<br><span class="threshold">Actual / Limit</span></th>
+                <th>Memory<br><span class="threshold">Actual / Limit</span></th>
+                <th>CPU<br><span class="threshold">Actual / Limit</span></th>
+                <th>Latency<br><span class="threshold">Actual / Limit</span></th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+    <script src="/static/js/dashboard.js"></script>
+    <script>
+      function onTimeRangeChange() {
+        var sel = document.getElementById('time-range-select');
+        var absDiv = document.getElementById('absolute-time-range');
+        if (sel.value === 'absolute') {
+          absDiv.style.display = '';
+        } else {
+          absDiv.style.display = 'none';
+        }
+      }
+      function applyAbsoluteTimeRange() {
+        // Just trigger a reload, dashboard.js will pick up the values
+        loadData();
+      }
+    </script>
+</body>
+</html> 
