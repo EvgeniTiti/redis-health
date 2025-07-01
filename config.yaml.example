@@ -1,0 +1,8 @@
+# Example config.yaml for Redis Health Dashboard
+redis_cloud_api_key: "YOUR_REDIS_CLOUD_API_KEY"
+redis_cloud_email: "your@email.com"
+prometheus_url: "http://localhost:9090"
+cloud_api_query_interval_seconds: 3600
+cloud_api_query_interval_seconds_autoscale: 60
+prometheus_query_interval_seconds: 30
+# Add any other config fields as needed 
