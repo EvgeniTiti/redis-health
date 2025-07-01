@@ -18,7 +18,7 @@ def metrics():
             autoscaling.autoscale_database(
                 sub_id,
                 entry,
-                entry['metrics'],
+                entry['metrics_autoscale'],
                 entry.get('thresholds', {}),
                 entry.get('max_scaling', {}),
                 data["databases"]  # Pass all databases to check if all are active

@@ -10,6 +10,7 @@ prometheus_query_interval_seconds: 30
 # Autoscaling configuration
 memory_scaling_percentage: 20  # Percentage increase for memory scaling (default 20%)
 throughput_scaling_percentage: 20  # Percentage increase for throughput scaling (default 20%)
+autoscale_query_period: 5m  # Time window for autoscaling decisions (default 5m)
 
 cloud_api_query_interval_seconds: 3600  # 1 hour default
 cloud_api_query_interval_seconds_autoscale: 60  # 1 minute if autoscaling enabled

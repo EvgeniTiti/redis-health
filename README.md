@@ -70,10 +70,31 @@ python app.py
 
 ## Configuration
 
+Copy `config.yaml.example` to `config.yaml` and edit with your values:
+
+```
+cp config.yaml.example config.yaml
+```
+
+### config.yaml fields
+- `redis_cloud_api_key`: Your Redis Cloud API key
+- `redis_cloud_email`: Your Redis Cloud account email
+- `throughput_threshold`: Percentage of throughput limit before alerting (default: 0.8)
+- `memory_threshold`: Percentage of memory limit before alerting (default: 0.8)
+- `cpu_threshold`: Percentage of CPU usage before alerting (default: 0.6)
+- `latency_threshold_ms`: Maximum acceptable latency in milliseconds (default: 3)
+- `prometheus_server_url`: The URL of your Prometheus server (e.g., http://localhost:9090 or your remote address)
+- `prometheus_query_period`: Default lookback window for Prometheus queries (default: 1h, but UI selection usually overrides this)
+- `prometheus_query_interval_seconds`: How often to fetch live metrics from Prometheus (default: 30)
+- `memory_scaling_percentage`: Percentage increase for memory scaling (default: 20)
+- `throughput_scaling_percentage`: Percentage increase for throughput scaling (default: 20)
+- `autoscale_query_period`: Time window for autoscaling decisions (default: 5m). **Autoscaling always uses this period, regardless of the UI selection.**
+- `cloud_api_query_interval_seconds`: How often to fetch static data from the Redis Cloud API (default: 3600)
+- `cloud_api_query_interval_seconds_autoscale`: How often to fetch static data if any DB has autoscaling enabled (default: 60)
+
 ### Environment Variables
 - `REDIS_CLOUD_API_KEY`: Your Redis Cloud API key
 - `REDIS_CLOUD_API_SECRET`: Your Redis Cloud API secret
-- `REDIS_CLOUD_ACCOUNT_ID`: Your Redis Cloud account ID
 
 ### Threshold Configuration
 The dashboard allows you to customize alert thresholds for different metrics:

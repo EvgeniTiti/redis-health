@@ -37,6 +37,8 @@ _redis_cache = {
     'last_fetch': None
 }
 
+AUTOSCALE_QUERY_PERIOD = config.get('autoscale_query_period', '5m')
+
 def is_any_autoscale_enabled():
     # Import here to avoid circular import
     try:
@@ -215,6 +217,7 @@ def get_metrics_for_db(cluster_label, db, thresholds, subscription_name, period)
 
 def get_all_metrics(period=None):
     prom_period = period if period else '5m'
+    autoscale_period = AUTOSCALE_QUERY_PERIOD
     subscriptions = get_subscriptions_cached()
     thresholds = {
         "throughput_threshold": THROUGHPUT_THRESHOLD,
@@ -241,28 +244,27 @@ def get_all_metrics(period=None):
                     cluster_label = private_endpoint.split(".internal.", 1)[1].split(":")[0]
                 else:
                     cluster_label = ""
-            # Use check_database_metrics_prometheus to get live metrics
-            # Adapt its return value to match the expected format
             import copy
             metrics_result = {}
             try:
-                # check_database_metrics_prometheus prints and returns nothing, so we adapt it to return the result dict
-                # We'll copy its logic here to build the result dict for the API
                 bdb = str(db.get("databaseId"))
                 cluster = db.get("subscriptionId")
                 mem_limit_gb = db.get("memoryLimitInGb", 0)
                 throughput_limit = db.get("throughputMeasurement", {}).get("value", 0)
-                period = prom_period
-                prom_url = PROM_SERVER_URL
+                # Use prom_period for UI metrics, autoscale_period for autoscaling
+                period_for_metrics = prom_period
+                period_for_autoscale = autoscale_period
                 labels = f'cluster="{cluster_label}",bdb="{bdb}"'
-                throughput = query_prometheus(prom_url, f'max_over_time(bdb_total_req_max{{{labels}}}[{period}])', bdb=bdb, cluster=cluster_label)
-                memory = query_prometheus(prom_url, f'max_over_time(bdb_used_memory{{{labels}}}[{period}])', bdb=bdb, cluster=cluster_label)
-                cpu = query_prometheus(prom_url, f'max_over_time(bdb_shard_cpu_user_max{{{labels}}}[{period}])', bdb=bdb, cluster=cluster_label)
-                latency = query_prometheus(prom_url, f'max_over_time(bdb_avg_latency_max{{{labels}}}[{period}])', bdb=bdb, cluster=cluster_label)
-                throughput_ok = throughput is not None and throughput < thresholds["throughput_threshold"] * throughput_limit
-                memory_ok = memory is not None and memory < thresholds["memory_threshold"] * mem_limit_gb * 1024 * 1024 * 1024  # bytes
-                cpu_ok = cpu is not None and cpu < thresholds["cpu_threshold"] * 100
-                latency_ok = latency is None or latency < thresholds["latency_threshold_ms"]
+                # Metrics for UI (period_for_metrics)
+                throughput = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_total_req_max{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label)
+                memory = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_used_memory{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label)
+                cpu = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_shard_cpu_user_max{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label)
+                latency = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_avg_latency_max{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label)
+                # Metrics for autoscaling (period_for_autoscale)
+                throughput_autoscale = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_total_req_max{{{labels}}}[{period_for_autoscale}])', bdb=bdb, cluster=cluster_label)
+                memory_autoscale = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_used_memory{{{labels}}}[{period_for_autoscale}])', bdb=bdb, cluster=cluster_label)
+                cpu_autoscale = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_shard_cpu_user_max{{{labels}}}[{period_for_autoscale}])', bdb=bdb, cluster=cluster_label)
+                latency_autoscale = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_avg_latency_max{{{labels}}}[{period_for_autoscale}])', bdb=bdb, cluster=cluster_label)
                 metrics_result = {
                     "subscription_id": cluster,
                     "subscription_name": sub_name,
@@ -276,12 +278,20 @@ def get_all_metrics(period=None):
                         "cpu": cpu,
                         "latency_ms": latency
                     },
+                    "metrics_autoscale": {
+                        "throughput": throughput_autoscale,
+                        "throughput_limit": throughput_limit,
+                        "memory": memory_autoscale,
+                        "memory_limit_bytes": mem_limit_gb * 1024 * 1024 * 1024,
+                        "cpu": cpu_autoscale,
+                        "latency_ms": latency_autoscale
+                    },
                     "thresholds": thresholds,
                     "status": {
-                        "throughput_ok": throughput_ok,
-                        "memory_ok": memory_ok,
-                        "cpu_ok": cpu_ok,
-                        "latency_ok": latency_ok
+                        "throughput_ok": throughput is not None and throughput < thresholds["throughput_threshold"] * throughput_limit,
+                        "memory_ok": memory is not None and memory < thresholds["memory_threshold"] * mem_limit_gb * 1024 * 1024 * 1024,
+                        "cpu_ok": cpu is not None and cpu < thresholds["cpu_threshold"] * 100,
+                        "latency_ok": latency is None or latency < thresholds["latency_threshold_ms"]
                     }
                 }
                 # Add max_scaling calculation
@@ -295,7 +305,6 @@ def get_all_metrics(period=None):
                     "throughput_ops": max_throughput
                 }
             except Exception as e:
-                # fallback to static/config data if needed
                 metrics_result = get_metrics_for_db(cluster_label, db, thresholds, sub_name, prom_period)
             result = metrics_result
             result["region"] = db.get("region")
