@@ -2,62 +2,219 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Redis DB Health Dashboard</title>
     <link rel="stylesheet" href="/static/css/dashboard.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 </head>
 <body>
-    <h1>Redis Database Health Dashboard</h1>
-    <div id="threshold-controls" style="margin-bottom: 1em;"></div>
-    <div style="margin-bottom: 1em;">
-        <label for="time-range-select"><b>Time Frame:</b></label>
-        <select id="time-range-select" onchange="onTimeRangeChange()">
-            <option value="5m">Last 5 minutes</option>
-            <option value="15m">Last 15 minutes</option>
-            <option value="30m">Last 30 minutes</option>
-            <option value="1h">Last 1 hour</option>
-            <option value="3h">Last 3 hours</option>
-            <option value="6h">Last 6 hours</option>
-            <option value="12h">Last 12 hours</option>
-            <option value="24h">Last 24 hours</option>
-            <option value="2d">Last 2 days</option>
-            <option value="absolute">Absolute...</option>
-        </select>
-        <div id="absolute-time-range" style="display:none; margin-top:8px;">
-            <label>From: <input type="datetime-local" id="abs-from"></label>
-            <label>To: <input type="datetime-local" id="abs-to"></label>
-            <button onclick="applyAbsoluteTimeRange()">Apply time range</button>
+    <!-- Header -->
+    <div class="dashboard-header">
+        <div class="container">
+            <h1><i class="fas fa-database"></i> Redis Database Health Dashboard</h1>
+            <p class="subtitle">Monitor and manage your Redis Cloud databases with real-time metrics and intelligent autoscaling</p>
+            <div class="header-actions">
+                <button class="btn btn-secondary" onclick="showHelp()" title="View help">
+                    <i class="fas fa-question-circle"></i> Help
+                </button>
+            </div>
         </div>
     </div>
-    <button onclick="loadData()">Refresh</button>
-    <table id="metricsTable">
-        <thead>
-            <tr>
-                <th>Subscription Name</th>
-                <th>Database</th>
-                <th>Throughput<br><span class="threshold">Actual / Limit</span></th>
-                <th>Memory<br><span class="threshold">Actual / Limit</span></th>
-                <th>CPU<br><span class="threshold">Actual / Limit</span></th>
-                <th>Latency<br><span class="threshold">Actual / Limit</span></th>
-                <th>Action</th>
-            </tr>
-        </thead>
-        <tbody></tbody>
-    </table>
+
+    <div class="container">
+        <!-- Threshold Controls -->
+        <div id="threshold-controls"></div>
+
+        <!-- Control Panel -->
+        <div class="control-panel">
+            <div class="control-group">
+                <label for="time-range-select"><i class="fas fa-clock"></i> Time Frame:</label>
+                <select id="time-range-select" onchange="onTimeRangeChange()">
+                    <option value="5m">Last 5 minutes</option>
+                    <option value="15m">Last 15 minutes</option>
+                    <option value="30m">Last 30 minutes</option>
+                    <option value="1h">Last 1 hour</option>
+                    <option value="3h">Last 3 hours</option>
+                    <option value="6h">Last 6 hours</option>
+                    <option value="12h">Last 12 hours</option>
+                    <option value="24h">Last 24 hours</option>
+                    <option value="2d">Last 2 days</option>
+                    <option value="absolute">Absolute...</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <button class="btn btn-primary" onclick="loadData()">
+                    <i class="fas fa-sync-alt"></i> Refresh
+                </button>
+            </div>
+
+            <div class="control-group">
+                <button class="btn btn-secondary" onclick="toggleAutoRefresh()" id="auto-refresh-btn">
+                    <i class="fas fa-play"></i> Auto Refresh
+                </button>
+            </div>
+
+            <div class="control-group">
+                <span id="last-updated">Last updated: Never</span>
+            </div>
+        </div>
+
+        <!-- Absolute Time Range -->
+        <div id="absolute-time-range" style="display:none; margin-bottom: 1.5rem;">
+            <div class="control-panel">
+                <div class="control-group">
+                    <label>From: <input type="datetime-local" id="abs-from"></label>
+                </div>
+                <div class="control-group">
+                    <label>To: <input type="datetime-local" id="abs-to"></label>
+                </div>
+                <div class="control-group">
+                    <button class="btn btn-primary" onclick="applyAbsoluteTimeRange()">Apply Time Range</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Summary Stats -->
+        <div id="summary-stats" style="margin-bottom: 1.5rem; display: none;">
+            <div class="control-panel">
+                <div class="control-group">
+                    <span><i class="fas fa-database"></i> Total Databases: <span id="total-dbs">0</span></span>
+                </div>
+                <div class="control-group">
+                    <span><i class="fas fa-check-circle"></i> Healthy: <span id="healthy-dbs">0</span></span>
+                </div>
+                <div class="control-group">
+                    <span><i class="fas fa-exclamation-triangle"></i> Needs Attention: <span id="attention-dbs">0</span></span>
+                </div>
+                <div class="control-group">
+                    <span><i class="fas fa-robot"></i> Autoscaling Enabled: <span id="autoscale-enabled">0</span></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Metrics Table -->
+        <div class="metrics-container">
+            <table id="metricsTable">
+                <thead>
+                    <tr>
+                        <th><i class="fas fa-server"></i> Subscription</th>
+                        <th><i class="fas fa-database"></i> Database</th>
+                        <th><i class="fas fa-tachometer-alt"></i> Throughput<br><span class="threshold">Actual / Limit</span></th>
+                        <th><i class="fas fa-memory"></i> Memory<br><span class="threshold">Actual / Limit</span></th>
+                        <th><i class="fas fa-microchip"></i> CPU<br><span class="threshold">Actual / Limit</span></th>
+                        <th><i class="fas fa-stopwatch"></i> Latency<br><span class="threshold">Actual / Limit</span></th>
+                        <th><i class="fas fa-exclamation-triangle"></i> Status</th>
+                        <th><i class="fas fa-robot"></i> Autoscaling</th>
+                        <th><i class="fas fa-chart-line"></i> Max Autoscaling<br><span class="threshold">Memory/Throughput</span></th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Help Modal -->
+    <div id="help-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2><i class="fas fa-question-circle"></i> Dashboard Help</h2>
+                <button class="modal-close" onclick="hideHelp()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <h3>Understanding the Dashboard</h3>
+                <p>This dashboard monitors your Redis Cloud databases and provides intelligent autoscaling recommendations.</p>
+                
+                <h4>Status Indicators</h4>
+                <ul>
+                    <li><span class="badge badge-green"><i class="fas fa-check"></i> Healthy</span> - Database is performing well</li>
+                    <li><span class="badge badge-red"><i class="fas fa-arrow-up"></i> Scale Up</span> - Database needs more resources</li>
+                    <li><span class="badge badge-yellow"><i class="fas fa-exclamation-triangle"></i> Review</span> - Some metrics need attention</li>
+                    <li><span class="badge badge-gray"><i class="fas fa-question-circle"></i> No Data</span> - No metrics available</li>
+                </ul>
+                
+                <h4>Autoscaling</h4>
+                <p>Enable autoscaling for databases to automatically adjust resources based on usage patterns. The system will:</p>
+                <ul>
+                    <li>Monitor memory and throughput usage</li>
+                    <li>Scale up when thresholds are exceeded</li>
+                    <li>Respect maximum scaling limits</li>
+                </ul>
+                
+                <h4>Threshold Configuration</h4>
+                <p>Configure custom thresholds for different metrics. Default values are:</p>
+                <ul>
+                    <li><strong>Throughput:</strong> 80% of limit</li>
+                    <li><strong>Memory:</strong> 80% of limit</li>
+                    <li><strong>CPU:</strong> 60% of limit</li>
+                    <li><strong>Latency:</strong> 3ms</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
     <script src="/static/js/dashboard.js"></script>
     <script>
-      function onTimeRangeChange() {
-        var sel = document.getElementById('time-range-select');
-        var absDiv = document.getElementById('absolute-time-range');
-        if (sel.value === 'absolute') {
-          absDiv.style.display = '';
-        } else {
-          absDiv.style.display = 'none';
+        function onTimeRangeChange() {
+            var sel = document.getElementById('time-range-select');
+            var absDiv = document.getElementById('absolute-time-range');
+            if (sel.value === 'absolute') {
+                absDiv.style.display = 'block';
+            } else {
+                absDiv.style.display = 'none';
+            }
         }
-      }
-      function applyAbsoluteTimeRange() {
-        // Just trigger a reload, dashboard.js will pick up the values
-        loadData();
-      }
+
+        function applyAbsoluteTimeRange() {
+            loadData();
+        }
+
+        function toggleAutoRefresh() {
+            const btn = document.getElementById('auto-refresh-btn');
+            const icon = btn.querySelector('i');
+            const text = btn.textContent;
+            
+            if (window.autoRefreshInterval) {
+                clearInterval(window.autoRefreshInterval);
+                window.autoRefreshInterval = null;
+                icon.className = 'fas fa-play';
+                btn.innerHTML = '<i class="fas fa-play"></i> Auto Refresh';
+            } else {
+                window.autoRefreshInterval = setInterval(loadData, 30000);
+                icon.className = 'fas fa-pause';
+                btn.innerHTML = '<i class="fas fa-pause"></i> Stop Auto Refresh';
+            }
+        }
+
+        // Update last updated timestamp
+        function updateLastUpdated() {
+            const now = new Date();
+            document.getElementById('last-updated').textContent = 
+                `Last updated: ${now.toLocaleTimeString()}`;
+        }
+
+        // Help modal functions
+        function showHelp() {
+            document.getElementById('help-modal').style.display = 'block';
+        }
+
+        function hideHelp() {
+            document.getElementById('help-modal').style.display = 'none';
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('help-modal');
+            if (event.target === modal) {
+                hideHelp();
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            loadData();
+            updateLastUpdated();
+        });
     </script>
 </body>
 </html> 

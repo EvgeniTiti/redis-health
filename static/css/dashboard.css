@@ -1,115 +1,655 @@
-.badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 8px;
-    font-size: 11px;
-    font-weight: bold;
-    margin: 2px 0;
-}
-.badge-green {
-    background: #c8e6c9;
-    color: #256029;
-    border: 1px solid #81c784;
-}
-.badge-red {
-    background: #ffcdd2;
-    color: #b71c1c;
-    border: 1px solid #e57373;
-}
-.badge-yellow {
-    background: #fff9c4;
-    color: #bfa600;
-    border: 1px solid #ffe082;
-}
-.badge-gray {
-    background: #e0e0e0;
-    color: #424242;
-    border: 1px solid #bdbdbd;
-}
-
-.na {
-    background: #f5f5f5 !important;
-    color: #888;
-}
-
-.threshold-panel {
-    background: #f4f8fb;
-    border: 1px solid #b3c6d4;
-    border-radius: 8px;
-    padding: 16px 12px 8px 12px;
-    margin-bottom: 18px;
-    max-width: 700px;
-}
-.threshold-title {
-    font-size: 16px;
-    font-weight: bold;
-    margin-bottom: 8px;
-    color: #1976d2;
-}
-.threshold-fields label {
-    margin-right: 18px;
-    font-size: 13px;
-}
-.threshold-fields input {
-    width: 50px;
-    margin-left: 4px;
-    margin-right: 8px;
-    padding: 2px 4px;
-    font-size: 13px;
-}
-.threshold-fields button {
-    margin-left: 8px;
-    padding: 4px 12px;
-    font-size: 13px;
-    border-radius: 4px;
-    border: 1px solid #1976d2;
-    background: #e3f2fd;
-    color: #1976d2;
-    cursor: pointer;
-}
-.threshold-fields button:hover {
-    background: #bbdefb;
+/* Modern CSS Reset and Base Styles */
+* {
+    box-sizing: border-box;
 }
 
 body { 
-    font-family: Arial, sans-serif; 
-    margin: 2em; 
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    margin: 0;
+    padding: 0;
+    background: #ffffff;
+    color: #1a1a1a;
+    line-height: 1.6;
+    font-size: 16px;
+}
+
+/* Header Styles - Redis.io inspired */
+.dashboard-header {
+    background: linear-gradient(135deg, #dc382d 0%, #b91d1d 100%);
+    color: white;
+    padding: 2rem 0;
+    margin: 0 0 2rem 0;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.dashboard-header h1 {
+    margin: 0;
+    font-size: 2.5rem;
+    font-weight: 700;
+    text-align: center;
+    letter-spacing: -0.025em;
+}
+
+.dashboard-header .subtitle {
+    margin: 0.5rem 0 0 0;
+    opacity: 0.9;
+    font-weight: 400;
+    text-align: center;
+    font-size: 1.125rem;
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.header-actions {
+    position: absolute;
+    top: 1.5rem;
+    right: 2rem;
+}
+
+/* Container */
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 1rem;
+}
+
+/* Control Panel - Redis.io card style */
+.control-panel {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.5rem;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    align-items: center;
+}
+
+.control-group {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.control-group label {
+    font-weight: 600;
+    color: #374151;
+    font-size: 0.875rem;
+    min-width: auto;
+}
+
+.control-group select,
+.control-group input {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid #d1d5db;
+    border-radius: 0.375rem;
+    font-size: 0.875rem;
+    transition: all 0.2s ease;
+    background: #ffffff;
+}
+
+.control-group select:focus,
+.control-group input:focus {
+    outline: none;
+    border-color: #dc382d;
+    box-shadow: 0 0 0 3px rgba(220, 56, 45, 0.1);
+}
+
+/* Button Styles - Redis.io inspired */
+.btn {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 0.375rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-size: 0.875rem;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.btn-primary {
+    background: #dc382d;
+    color: white;
+}
+
+.btn-primary:hover {
+    background: #b91d1d;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(220, 56, 45, 0.3);
+}
+
+.btn-primary:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+.btn-secondary {
+    background: #ffffff;
+    color: #374151;
+    border: 1px solid #d1d5db;
+}
+
+.btn-secondary:hover {
+    background: #f9fafb;
+    border-color: #9ca3af;
+    color: #1f2937;
+}
+
+/* Table Styles - Redis.io inspired */
+.metrics-container {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.5rem;
+    overflow: hidden;
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+    position: relative;
 }
 
 table { 
     border-collapse: collapse; 
     width: 100%; 
-    font-size: 12px; 
+    font-size: 0.875rem; 
 }
 
 th, td { 
-    border: 1px solid #ccc; 
-    padding: 6px; 
+    padding: 0.75rem; 
     text-align: center; 
+    border-bottom: 1px solid #f3f4f6;
 }
 
 th { 
-    background: #f4f4f4; 
+    background: #f9fafb;
+    font-weight: 600;
+    color: #374151;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
 }
 
+th:first-child {
+    text-align: left;
+}
+
+/* Status Indicators - Redis.io inspired */
 .ok { 
-    background: #c8e6c9; 
+    background: #f0fdf4;
+    color: #166534;
+    border-radius: 0.375rem;
+    margin: 0.125rem;
+    border: 1px solid #bbf7d0;
 }
 
 .fail { 
-    background: #ffcdd2; 
+    background: #fef2f2;
+    color: #dc2626;
+    border-radius: 0.375rem;
+    margin: 0.125rem;
+    border: 1px solid #fecaca;
+}
+
+.na {
+    background: #f9fafb !important;
+    color: #6b7280;
+    border-radius: 0.375rem;
+    margin: 0.125rem;
+    border: 1px solid #e5e7eb;
 }
 
 .subscription-header { 
-    background: #e3f2fd; 
-    font-weight: bold; 
+    background: #f8fafc;
+    font-weight: 600;
+    color: #1e40af;
+    text-align: left;
+    border-left: 4px solid #dc382d;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
 }
 
+.subscription-header:hover {
+    background: #f1f5f9;
+}
+
+.subscription-header-content {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.25rem 0;
+}
+
+.collapse-btn {
+    background: none;
+    border: none;
+    color: #dc382d;
+    cursor: pointer;
+    padding: 0.25rem;
+    border-radius: 0.25rem;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+}
+
+.collapse-btn:hover {
+    background: rgba(220, 56, 45, 0.1);
+    transform: scale(1.1);
+}
+
+.subscription-name {
+    font-weight: 600;
+    color: #1e40af;
+}
+
+.subscription-count {
+    color: #6b7280;
+    font-size: 0.875rem;
+    font-weight: 400;
+}
+
+.database-row {
+    background: #ffffff;
+    transition: all 0.2s ease;
+}
+
+.database-row:hover {
+    background: #f9fafb;
+}
+
+.database-row td:first-child {
+    background: #f8fafc;
+    border-left: 2px solid #e5e7eb;
+    width: 20px;
+    padding: 0.75rem 0.5rem;
+}
+
+/* Badge Styles - Redis.io inspired */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0.75rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.badge-green {
+    background: #f0fdf4;
+    color: #166534;
+    border: 1px solid #bbf7d0;
+}
+
+.badge-red {
+    background: #fef2f2;
+    color: #dc2626;
+    border: 1px solid #fecaca;
+}
+
+.badge-yellow {
+    background: #fffbeb;
+    color: #92400e;
+    border: 1px solid #fed7aa;
+}
+
+.badge-gray {
+    background: #f9fafb;
+    color: #6b7280;
+    border: 1px solid #e5e7eb;
+}
+
+/* Threshold Panel - Redis.io card style */
+.threshold-panel {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.5rem;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+}
+
+.threshold-title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    color: #111827;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.threshold-title::before {
+    content: "⚙️";
+    font-size: 1.25rem;
+}
+
+.threshold-fields {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: center;
+}
+
+.threshold-fields label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #374151;
+}
+
+.threshold-fields input {
+    width: 80px;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid #d1d5db;
+    border-radius: 0.375rem;
+    font-size: 0.875rem;
+    text-align: center;
+}
+
+.threshold-fields input:focus {
+    outline: none;
+    border-color: #dc382d;
+    box-shadow: 0 0 0 3px rgba(220, 56, 45, 0.1);
+}
+
+.threshold-fields button {
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    border-radius: 0.375rem;
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-weight: 600;
+}
+
+.threshold-fields button:first-of-type {
+    background: #dc382d;
+    color: white;
+}
+
+.threshold-fields button:last-of-type {
+    background: #ffffff;
+    color: #374151;
+    border: 1px solid #d1d5db;
+}
+
+.threshold-fields button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Utility Classes */
 .threshold { 
-    font-size: 10px; 
-    color: #666; 
+    font-size: 0.75rem; 
+    color: #6b7280;
+    font-weight: 400;
 }
 
 .value { 
-    font-weight: bold; 
+    font-weight: 600;
+    font-size: 0.875rem;
+}
+
+/* Notification Styles - Redis.io inspired */
+.notification {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.5rem;
+    padding: 1rem 1.25rem;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    z-index: 1000;
+    transform: translateX(100%);
+    transition: transform 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-weight: 500;
+    max-width: 300px;
+}
+
+.notification.show {
+    transform: translateX(0);
+}
+
+.notification-success {
+    border-left: 4px solid #10b981;
+    color: #065f46;
+}
+
+.notification-error {
+    border-left: 4px solid #ef4444;
+    color: #991b1b;
+}
+
+.notification-info {
+    border-left: 4px solid #3b82f6;
+    color: #1e40af;
+}
+
+/* Checkbox Styles */
+.autoscale-checkbox {
+    width: 1rem;
+    height: 1rem;
+    cursor: pointer;
+    accent-color: #dc382d;
+}
+
+/* Modal Styles - Redis.io inspired */
+.modal {
+    position: fixed;
+    z-index: 2000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(4px);
+}
+
+.modal-content {
+    background-color: #ffffff;
+    margin: 5% auto;
+    padding: 0;
+    border-radius: 0.5rem;
+    width: 90%;
+    max-width: 600px;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+    animation: modalSlideIn 0.3s ease;
+    border: 1px solid #e5e7eb;
+}
+
+@keyframes modalSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-50px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.modal-header {
+    background: #dc382d;
+    color: white;
+    padding: 1.25rem 1.5rem;
+    border-radius: 0.5rem 0.5rem 0 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.modal-header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    color: white;
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0;
+    width: 2rem;
+    height: 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    transition: background-color 0.2s ease;
+}
+
+.modal-close:hover {
+    background-color: rgba(255,255,255,0.2);
+}
+
+.modal-body {
+    padding: 1.5rem;
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+.modal-body h3 {
+    color: #111827;
+    margin-top: 0;
+    margin-bottom: 1rem;
+    font-size: 1.125rem;
+    font-weight: 600;
+}
+
+.modal-body h4 {
+    color: #374151;
+    margin-top: 1.5rem;
+    margin-bottom: 0.75rem;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.modal-body p {
+    color: #6b7280;
+    line-height: 1.6;
+    margin-bottom: 1rem;
+}
+
+.modal-body ul {
+    color: #6b7280;
+    line-height: 1.6;
+    padding-left: 1.25rem;
+}
+
+.modal-body li {
+    margin-bottom: 0.5rem;
+}
+
+.modal-body .badge {
+    margin-right: 0.5rem;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    body {
+        padding: 0;
+    }
+    
+    .dashboard-header {
+        padding: 1.5rem 1rem;
+    }
+    
+    .dashboard-header h1 {
+        font-size: 2rem;
+    }
+    
+    .header-actions {
+        position: static;
+        margin-top: 1rem;
+        text-align: center;
+    }
+    
+    .control-panel {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 1rem;
+    }
+    
+    .threshold-fields {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    table {
+        font-size: 0.75rem;
+    }
+    
+    th, td {
+        padding: 0.5rem 0.25rem;
+    }
+    
+    .notification {
+        right: 0.5rem;
+        left: 0.5rem;
+        max-width: none;
+    }
+}
+
+/* Loading Animation */
+.loading {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+.loading::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 1.5rem;
+    height: 1.5rem;
+    margin: -0.75rem 0 0 -0.75rem;
+    border: 2px solid #dc382d;
+    border-top: 2px solid transparent;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Hover Effects */
+tr:hover {
+    background-color: #f9fafb;
+}
+
+.subscription-header:hover {
+    background: #f1f5f9;
+}
+
+/* Focus States */
+.btn:focus,
+.control-group select:focus,
+.control-group input:focus,
+.autoscale-checkbox:focus {
+    outline: 2px solid #dc382d;
+    outline-offset: 2px;
 } 
