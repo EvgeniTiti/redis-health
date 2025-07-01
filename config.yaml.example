@@ -1,8 +1,18 @@
 # Example config.yaml for Redis Health Dashboard
-redis_cloud_api_key: "YOUR_REDIS_CLOUD_API_KEY"
-redis_cloud_email: "your@email.com"
-prometheus_url: "http://localhost:9090"
-cloud_api_query_interval_seconds: 3600
-cloud_api_query_interval_seconds_autoscale: 60
+throughput_threshold: 0.8  # 80% of configured throughput
+memory_threshold: 0.8      # 80% of memory limit
+cpu_threshold: 0.6         # 60% of CPU
+latency_threshold_ms: 3    # 3 milliseconds
+prometheus_server_url: http://localhost:9090/
+prometheus_query_period: 1h
 prometheus_query_interval_seconds: 30
+redis_api_query_interval_seconds: 60  # Interval for Redis API queries (default 1 hour)
+
+# Autoscaling configuration
+memory_scaling_percentage: 20  # Percentage increase for memory scaling (default 20%)
+throughput_scaling_percentage: 20  # Percentage increase for throughput scaling (default 20%)
+
+cloud_api_query_interval_seconds: 3600  # 1 hour default
+cloud_api_query_interval_seconds_autoscale: 60  # 1 minute if autoscaling enabled
+
 # Add any other config fields as needed 
