@@ -6,7 +6,6 @@ latency_threshold_ms: 3    # 3 milliseconds
 prometheus_server_url: http://localhost:9090/
 prometheus_query_period: 1h
 prometheus_query_interval_seconds: 30
-redis_api_query_interval_seconds: 60  # Interval for Redis API queries (default 1 hour)
 
 # Autoscaling configuration
 memory_scaling_percentage: 20  # Percentage increase for memory scaling (default 20%)
