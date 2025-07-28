@@ -1,14 +1,17 @@
+// Global variables
+let isLoading = false;
+let autoscaleEnabled = {};
+let autoscaleStatus = {};
 let customThresholds = null;
 let defaultThresholds = {
     throughput: 0.8,
     memory: 0.8,
     cpu: 0.6,
-    latency: 3
+    latency: 3,
+    payload_size_kb: 3
 };
-let autoscaleEnabled = {};
-let autoscaleStatus = {};
-let isLoading = false;
 
+// Utility functions
 function formatBytes(bytes) {
     if (bytes === null || bytes === undefined) return 'N/A';
     const gb = bytes / (1024 * 1024 * 1024);
@@ -41,6 +44,21 @@ function formatMaxScaling(memory_gb, throughput_ops) {
     return `${memory_gb}GB / ${throughput_k}K ops/sec`;
 }
 
+function formatPriceHourly(price) {
+    if (price === null || price === undefined) return 'N/A';
+    return `$${price.toFixed(3)}/hr`;
+}
+
+function formatMinSubscriptionPrice(price) {
+    if (price === null || price === undefined) return 'N/A';
+    return `$${price.toFixed(3)}/hr`;
+}
+
+function formatPayloadSize(bytes) {
+    if (bytes === null || bytes === undefined) return 'N/A';
+    return (bytes / 1024).toFixed(1) + ' KB';
+}
+
 function getThresholds(db) {
     if (!customThresholds) return db.thresholds;
     // Use custom thresholds if set
@@ -48,7 +66,8 @@ function getThresholds(db) {
         throughput_threshold: customThresholds.throughput,
         memory_threshold: customThresholds.memory,
         cpu_threshold: customThresholds.cpu,
-        latency_threshold_ms: customThresholds.latency
+        latency_threshold_ms: customThresholds.latency,
+        payload_size_threshold_kb: customThresholds.payload_size_kb
     };
 }
 
@@ -57,9 +76,10 @@ function setThresholdInputs(thresh) {
     document.getElementById('thresh-memory').value = (thresh.memory * 100).toFixed(0);
     document.getElementById('thresh-cpu').value = (thresh.cpu * 100).toFixed(0);
     document.getElementById('thresh-latency').value = thresh.latency;
+    document.getElementById('thresh-payload-size').value = thresh.payload_size_kb || 1024;
 }
 
-function getStatusSummary(throughput_ok, memory_ok, cpu_ok, latency_ok, m) {
+function getStatusSummary(throughput_ok, memory_ok, cpu_ok, latency_ok, payload_size_ok, m) {
     // If both throughput and memory are N/A, show No Data
     if ((m.throughput === null || m.throughput === undefined) && (m.memory === null || m.memory === undefined)) {
         return '<span class="badge badge-gray"><i class="fas fa-question-circle"></i> No Data</span>';
@@ -70,44 +90,57 @@ function getStatusSummary(throughput_ok, memory_ok, cpu_ok, latency_ok, m) {
         return '<span class="badge badge-red"><i class="fas fa-arrow-up"></i> Scale Up</span>';
     }
     // All metrics N/A
-    if ([m.throughput, m.memory, m.cpu, m.latency_ms].every(v => v === null || v === undefined)) {
+    if ([m.throughput, m.memory, m.cpu, m.latency_ms, m.payload_size_bytes].every(v => v === null || v === undefined)) {
         return '<span class="badge badge-gray"><i class="fas fa-question-circle"></i> No Data</span>';
     }
     // N/A logic (some metrics N/A)
-    if ([m.throughput, m.memory, m.cpu, m.latency_ms].some(v => v === null || v === undefined)) {
+    if ([m.throughput, m.memory, m.cpu, m.latency_ms, m.payload_size_bytes].some(v => v === null || v === undefined)) {
         return '';
     }
     // All green - no action needed
-    if (throughput_ok && memory_ok && cpu_ok && latency_ok) {
+    if (throughput_ok && memory_ok && cpu_ok && latency_ok && payload_size_ok) {
         return '<span class="badge badge-green"><i class="fas fa-check"></i> Healthy</span>';
     }
     // All red
-    if (!throughput_ok && !memory_ok && !cpu_ok && !latency_ok) {
+    if (!throughput_ok && !memory_ok && !cpu_ok && !latency_ok && !payload_size_ok) {
         return '<span class="badge badge-red"><i class="fas fa-arrow-up"></i> Scale Up</span>';
     }
-    // (throughput is red OR memory is red) AND (CPU and latency are green)
-    if ((!throughput_ok || !memory_ok) && cpu_ok && latency_ok) {
+    // (throughput is red OR memory is red) AND (CPU, latency, and payload size are green)
+    if ((!throughput_ok || !memory_ok) && cpu_ok && latency_ok && payload_size_ok) {
         return '<span class="badge badge-red"><i class="fas fa-arrow-up"></i> Scale Up</span>';
     }
-    // Only CPU and/or latency red (not throughput or memory)
-    if ((cpu_ok === false || latency_ok === false) && throughput_ok && memory_ok && (cpu_ok === false || latency_ok === false) && !(throughput_ok === false || memory_ok === false)) {
+    // Only CPU, latency, or payload size red (not throughput or memory)
+    if ((cpu_ok === false || latency_ok === false || payload_size_ok === false) && throughput_ok && memory_ok) {
         return '<span class="badge badge-yellow"><i class="fas fa-exclamation-triangle"></i> Review</span>';
     }
     // Only CPU red
-    if (!cpu_ok && throughput_ok && memory_ok && latency_ok) {
+    if (!cpu_ok && throughput_ok && memory_ok && latency_ok && payload_size_ok) {
         return '<span class="badge badge-yellow"><i class="fas fa-exclamation-triangle"></i> Review</span>';
     }
     // Only latency red
-    if (!latency_ok && throughput_ok && memory_ok && cpu_ok) {
+    if (!latency_ok && throughput_ok && memory_ok && cpu_ok && payload_size_ok) {
+        return '<span class="badge badge-yellow"><i class="fas fa-exclamation-triangle"></i> Review</span>';
+    }
+    // Only payload size red
+    if (!payload_size_ok && throughput_ok && memory_ok && cpu_ok && latency_ok) {
         return '<span class="badge badge-yellow"><i class="fas fa-exclamation-triangle"></i> Review</span>';
     }
     // Only CPU and latency red
-    if (!cpu_ok && !latency_ok && throughput_ok && memory_ok) {
+    if (!cpu_ok && !latency_ok && throughput_ok && memory_ok && payload_size_ok) {
+        return '<span class="badge badge-yellow"><i class="fas fa-exclamation-triangle"></i> Review</span>';
+    }
+    // Only CPU and payload size red
+    if (!cpu_ok && !payload_size_ok && throughput_ok && memory_ok && latency_ok) {
+        return '<span class="badge badge-yellow"><i class="fas fa-exclamation-triangle"></i> Review</span>';
+    }
+    // Only latency and payload size red
+    if (!latency_ok && !payload_size_ok && throughput_ok && memory_ok && cpu_ok) {
         return '<span class="badge badge-yellow"><i class="fas fa-exclamation-triangle"></i> Review</span>';
     }
     return '';
 }
 
+// Autoscaling functions
 async function fetchAutoscaleStatus() {
     try {
         const res = await fetch('/api/autoscaling-status');
@@ -156,7 +189,7 @@ function calculateSummaryStats(data) {
     let healthy = 0;
     let attention = 0;
     let autoscaleCount = 0;
-
+    
     data.forEach(db => {
         total++;
         const m = db.metrics;
@@ -184,7 +217,7 @@ function calculateSummaryStats(data) {
             healthy++;
         }
     });
-
+    
     return { total, healthy, attention, autoscaleCount };
 }
 
@@ -211,25 +244,28 @@ function showNotification(message, type = 'info') {
 function setLoadingState(loading) {
     isLoading = loading;
     const container = document.querySelector('.metrics-container');
-    const refreshBtn = document.querySelector('.btn-primary');
+    const refreshBtn = document.getElementById('refresh-btn'); // Use ID, not class!
     
     if (loading) {
         container.classList.add('loading');
-        refreshBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
-        refreshBtn.disabled = true;
+        if (refreshBtn) {
+            refreshBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+            refreshBtn.disabled = true;
+        }
     } else {
         container.classList.remove('loading');
-        refreshBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
-        refreshBtn.disabled = false;
+        if (refreshBtn) {
+            refreshBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
+            refreshBtn.disabled = false;
+        }
     }
 }
 
+// Main data loading function
 async function loadData() {
     if (isLoading) return;
     setLoadingState(true);
     try {
-        await fetchAutoscaleEnabled();
-        await fetchAutoscaleStatus();
         // Get time range selection
         let period = document.getElementById('time-range-select')?.value || '5m';
         let params = [];
@@ -248,6 +284,10 @@ async function loadData() {
         const data = await res.json();
         setLoadingState(false); // Hide spinner as soon as data is fetched
         const dbs = data.databases || data;
+        
+        await fetchAutoscaleEnabled();
+        await fetchAutoscaleStatus();
+        
         // Show/hide warning banner
         let banner = document.getElementById('prometheus-warning');
         if (!banner && data.prometheus_available === false) {
@@ -259,8 +299,10 @@ async function loadData() {
         } else if (banner && data.prometheus_available !== false) {
             banner.remove();
         }
+        
         const tbody = document.querySelector('#metricsTable tbody');
         tbody.innerHTML = '';
+        
         // Calculate and display summary stats
         const stats = calculateSummaryStats(dbs);
         document.getElementById('total-dbs').textContent = stats.total;
@@ -268,6 +310,7 @@ async function loadData() {
         document.getElementById('attention-dbs').textContent = stats.attention;
         document.getElementById('autoscale-enabled').textContent = stats.autoscaleCount;
         document.getElementById('summary-stats').style.display = 'block';
+        
         // Group data by subscription
         const groupedData = {};
         dbs.forEach(db => {
@@ -287,7 +330,7 @@ async function loadData() {
             // Add subscription header with collapse button
             tbody.innerHTML += `
                 <tr class="subscription-row" data-subscription="${subId}">
-                    <td class="subscription-header" colspan="9">
+                    <td class="subscription-header" colspan="10">
                         <div class="subscription-header-content">
                             <button class="collapse-btn" onclick="toggleSubscription('${collapseId}')" title="Toggle subscription">
                                 <i class="fas fa-chevron-down"></i>
@@ -310,21 +353,26 @@ async function loadData() {
                 const memory_ok = m.memory !== null && m.memory < t.memory_threshold * m.memory_limit_bytes;
                 const cpu_ok = m.cpu !== null && m.cpu < t.cpu_threshold * 100;
                 const latency_ok = m.latency_ms !== null && (m.latency_ms * 1000) < t.latency_threshold_ms;
-                const summary = getStatusSummary(throughput_ok, memory_ok, cpu_ok, latency_ok, m);
+                const payload_size_ok = m.payload_size_bytes !== null && m.payload_size_bytes < (t.payload_size_threshold_kb || 1024) * 1024;
+                const summary = getStatusSummary(throughput_ok, memory_ok, cpu_ok, latency_ok, payload_size_ok, m);
+                
                 const dbId = db.database_id;
                 const enabledKey = `${subId}_${dbId}`;
                 let checked = autoscaleEnabled[enabledKey] ? 'checked' : '';
                 let autoscaleCell = `<input type="checkbox" class="autoscale-checkbox" data-db="${dbId}" data-sub="${subId}" ${checked} />`;
                 
-                tbody.innerHTML += `
+                // Build table row with conditional autoscaling cell
+                let rowHTML = `
                     <tr class="database-row ${collapseId}" data-subscription="${subId}">
                         <td></td>
                         <td>${db.database_name}</td>
                         <td class="${m.throughput === null || m.throughput === undefined ? 'na' : (throughput_ok ? 'ok' : 'fail')}">
                             <div class="value">${formatThroughput(m.throughput, m.throughput_limit)}</div>
+                            ${db.downscale_throughput_ops ? `<div class='downscale-suggestion'>↓ Suggest: ${db.downscale_throughput_ops.toLocaleString()} ops</div>` : ''}
                         </td>
                         <td class="${m.memory === null || m.memory === undefined ? 'na' : (memory_ok ? 'ok' : 'fail')}">
                             <div class="value">${formatBytes(m.memory)} / ${formatBytes(m.memory_limit_bytes)}</div>
+                            ${db.downscale_memory_mb ? `<div class='downscale-suggestion'>↓ Suggest: ${db.downscale_memory_mb} MB</div>` : ''}
                         </td>
                         <td class="${m.cpu === null || m.cpu === undefined ? 'na' : (cpu_ok ? 'ok' : 'fail')}">
                             <div class="value">${formatCPU(m.cpu, t.cpu_threshold)}</div>
@@ -332,11 +380,24 @@ async function loadData() {
                         <td class="${m.latency_ms === null || m.latency_ms === undefined ? 'na' : (latency_ok ? 'ok' : 'fail')}">
                             <div class="value">${formatLatency(m.latency_ms, t.latency_threshold_ms)}</div>
                         </td>
-                        <td>${summary}</td>
-                        <td>${autoscaleCell}</td>
-                        <td><div class="value">${formatMaxScaling(db.max_scaling?.memory_gb, db.max_scaling?.throughput_ops)}</div></td>
+                        <td class="${m.payload_size_bytes === null || m.payload_size_bytes === undefined ? 'na' : (payload_size_ok ? 'ok' : 'fail')}">
+                            <div class="value">${formatPayloadSize(m.payload_size_bytes)}</div>
+                        </td>
+                        <td>${summary}`;
+                
+                // Add autoscaling cells
+                rowHTML += `<td>${autoscaleCell}</td>`;
+                rowHTML += `<td><div class="value">${formatMaxScaling(db.max_scaling?.memory_gb, db.max_scaling?.throughput_ops)}</div></td>`;
+                
+                rowHTML += `
+                        <td><div class="value">${formatPriceHourly(db.price_hourly)}</div>
+                            ${db.downscale_price_suggestion ? `<div class='price-suggestion'>💲 $${db.downscale_price_suggestion.price}/hr (${db.downscale_price_suggestion.unit_type}${db.downscale_price_suggestion.units_needed > 1 ? ' x' + db.downscale_price_suggestion.units_needed : ''})</div>` : ''}
+                        </td>
+                        <td><div class="value">${formatMinSubscriptionPrice(db.min_subscription_price)}</div></td>
                     </tr>
                 `;
+                
+                tbody.innerHTML += rowHTML;
             });
         });
         
@@ -354,9 +415,10 @@ async function loadData() {
         setLoadingState(false);
         console.error('Failed to load data:', error);
         showNotification('Failed to load metrics data', 'error');
+        const errorColspan = 10;
         document.querySelector('#metricsTable tbody').innerHTML = `
             <tr>
-                <td colspan="9" style="text-align: center; padding: 40px; color: #6c757d;">
+                <td colspan="${errorColspan}" style="text-align: center; padding: 40px; color: #6c757d;">
                     <i class="fas fa-exclamation-triangle" style="font-size: 2em; margin-bottom: 10px;"></i><br>
                     Failed to load data. Please try again.
                 </td>
@@ -375,6 +437,7 @@ function setupThresholdControls() {
                 <label>Memory (%): <input id="thresh-memory" type="number" min="0" max="100" step="1" value="80"></label>
                 <label>CPU (%): <input id="thresh-cpu" type="number" min="0" max="100" step="1" value="60"></label>
                 <label>Latency (ms): <input id="thresh-latency" type="number" min="0" step="1" value="3"></label>
+                <label>Payload Size (KB): <input id="thresh-payload-size" type="number" min="0" step="1" value="1024"></label>
                 <button id="apply-thresholds" class="btn btn-primary">Apply</button>
                 <button id="reset-thresholds" class="btn btn-secondary">Reset</button>
             </div>
@@ -386,7 +449,8 @@ function setupThresholdControls() {
             throughput: parseFloat(document.getElementById('thresh-throughput').value) / 100,
             memory: parseFloat(document.getElementById('thresh-memory').value) / 100,
             cpu: parseFloat(document.getElementById('thresh-cpu').value) / 100,
-            latency: parseFloat(document.getElementById('thresh-latency').value)
+            latency: parseFloat(document.getElementById('thresh-latency').value),
+            payload_size_kb: parseFloat(document.getElementById('thresh-payload-size').value)
         };
         
         // Only reload if thresholds actually changed
@@ -394,7 +458,8 @@ function setupThresholdControls() {
             customThresholds.throughput !== newThresholds.throughput ||
             customThresholds.memory !== newThresholds.memory ||
             customThresholds.cpu !== newThresholds.cpu ||
-            customThresholds.latency !== newThresholds.latency;
+            customThresholds.latency !== newThresholds.latency ||
+            customThresholds.payload_size_kb !== newThresholds.payload_size_kb;
         
         if (thresholdsChanged) {
             customThresholds = newThresholds;
@@ -432,10 +497,17 @@ async function refreshCloudData() {
     }
 }
 
+function updateLastUpdated() {
+    const now = new Date();
+    const timeString = now.toLocaleTimeString();
+    const dateString = now.toLocaleDateString();
+    document.getElementById('last-updated').textContent = `Last updated: ${dateString} ${timeString}`;
+}
+
 // Initialize dashboard
 document.addEventListener('DOMContentLoaded', async function() {
-    setupThresholdControls();
-    loadData();
+    setupThresholdControls(); // Only once on page load
+    
     // Fetch config for Prometheus interval
     let prometheusInterval = 30000;
     try {
@@ -447,8 +519,13 @@ document.addEventListener('DOMContentLoaded', async function() {
             }
         }
     } catch (e) { /* fallback to default */ }
+    
+    // Load initial data
+    loadData();
+    
     // Auto-refresh using config interval
     window.autoRefreshInterval = setInterval(loadData, prometheusInterval);
+    
     // Add manual cloud refresh button
     const controlPanel = document.querySelector('.control-panel');
     if (controlPanel) {
@@ -463,6 +540,27 @@ document.addEventListener('DOMContentLoaded', async function() {
         } else {
             controlPanel.appendChild(refreshCloudBtn);
         }
+        // Add id to the main Refresh button for targeting
+        if (refreshBtn) {
+            refreshBtn.id = 'refresh-btn';
+        }
+    }
+    
+    // Add event handler for main Refresh button
+    const mainRefreshBtn = document.getElementById('refresh-btn');
+    if (mainRefreshBtn) {
+        mainRefreshBtn.onclick = () => {
+            setupThresholdControls(); // Reload threshold controls
+            loadData();               // Reload data
+        };
+    }
+    
+    // Time frame change only reloads data
+    const timeRangeSelect = document.getElementById('time-range-select');
+    if (timeRangeSelect) {
+        timeRangeSelect.onchange = () => {
+            loadData();
+        };
     }
 });
 

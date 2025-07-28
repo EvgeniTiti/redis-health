@@ -6,6 +6,7 @@ import json
 from dotenv import load_dotenv
 import re
 from datetime import datetime, timedelta
+import math
 
 load_dotenv()
 
@@ -21,6 +22,7 @@ THROUGHPUT_THRESHOLD = config.get('throughput_threshold', 0.8)
 MEMORY_THRESHOLD = config.get('memory_threshold', 0.8)
 CPU_THRESHOLD = config.get('cpu_threshold', 0.6)
 LATENCY_THRESHOLD_MS = config.get('latency_threshold_ms', 3)
+PAYLOAD_SIZE_THRESHOLD_KB = config.get('payload_size_threshold_kb', 3)
 PROM_SERVER_URL = config.get('prometheus_server_url', 'http://localhost:9090')
 PROM_QUERY_PERIOD = config.get('prometheus_query_period', '1h')
 CLOUD_API_QUERY_INTERVAL_SECONDS = config.get('cloud_api_query_interval_seconds', 3600)
@@ -75,6 +77,66 @@ def get_databases_for_subscription_cached(subscription_id):
     dbs = get_databases_for_subscription(subscription_id)
     _redis_cache['databases'][subscription_id] = dbs
     return dbs
+
+# --- Pricing cache and fetch ---
+_pricing_cache = {
+    'pricing': {},  # {subscription_id: pricing_list}
+    'last_fetch': {},  # {subscription_id: datetime}
+}
+
+PRICING_CACHE_TTL_SECONDS = 3600  # 1 hour
+
+def get_pricing_for_subscription(subscription_id):
+    now = datetime.utcnow()
+    last_fetch = _pricing_cache['last_fetch'].get(subscription_id)
+    if (
+        subscription_id in _pricing_cache['pricing']
+        and last_fetch
+        and (now - last_fetch).total_seconds() < PRICING_CACHE_TTL_SECONDS
+    ):
+        return _pricing_cache['pricing'][subscription_id]
+    url = f"{API_URL}/subscriptions/{subscription_id}/pricing"
+    headers = {
+        "accept": "application/json",
+        "x-api-key": API_KEY,
+        "x-api-secret-key": API_SECRET
+    }
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        pricing = data.get("pricing", [])
+        _pricing_cache['pricing'][subscription_id] = pricing
+        _pricing_cache['last_fetch'][subscription_id] = now
+        return pricing
+    except Exception as e:
+        return []
+
+# --- Shard Type Pricing and Unit Types Cache ---
+_shardtype_cache = {
+    'types': None,
+    'pricings': None
+}
+
+def get_shard_types():
+    if _shardtype_cache['types'] is not None:
+        return _shardtype_cache['types']
+    url = 'https://app.redislabs.com/api/v1/shardTypes'
+    resp = requests.get(url)
+    resp.raise_for_status()
+    data = resp.json()
+    _shardtype_cache['types'] = data.get('shardTypes', [])
+    return _shardtype_cache['types']
+
+def get_shard_type_pricings():
+    if _shardtype_cache['pricings'] is not None:
+        return _shardtype_cache['pricings']
+    url = 'https://app.redislabs.com/api/v1/shardTypePricings'
+    resp = requests.get(url)
+    resp.raise_for_status()
+    data = resp.json()
+    _shardtype_cache['pricings'] = data.get('shardTypePricings', [])
+    return _shardtype_cache['pricings']
 
 # --- Existing API functions ---
 def get_subscriptions():
@@ -142,11 +204,23 @@ def check_database_metrics_prometheus(cluster_label, db, thresholds):
     memory = query_prometheus(prom_url, f'max_over_time(bdb_used_memory{{{labels}}}[{period}])', bdb=bdb, cluster=cluster_label)
     cpu = query_prometheus(prom_url, f'max_over_time(bdb_shard_cpu_user_max{{{labels}}}[{period}])', bdb=bdb, cluster=cluster_label)
     latency = query_prometheus(prom_url, f'max_over_time(bdb_avg_latency_max{{{labels}}}[{period}])', bdb=bdb, cluster=cluster_label)
+    
+    # Calculate average payload size (bytes per request)
+    payload_size = None
+    # Numerator: latest ingress + egress bytes
+    ingress_bytes = query_prometheus(prom_url, f'bdb_ingress_bytes_max{{{labels}}}', bdb=bdb, cluster=cluster_label)
+    egress_bytes = query_prometheus(prom_url, f'bdb_egress_bytes_max{{{labels}}}', bdb=bdb, cluster=cluster_label)
+    # Denominator: max_over_time of bdb_total_req_max over the period
+    throughput_max = query_prometheus(prom_url, f'max_over_time(bdb_total_req_max{{{labels}}}[{period}])', bdb=bdb, cluster=cluster_label)
+    if ingress_bytes is not None and egress_bytes is not None and throughput_max is not None and throughput_max > 0:
+        total_bytes = ingress_bytes + egress_bytes
+        payload_size = total_bytes / throughput_max  # bytes per request
 
     throughput_ok = throughput is not None and throughput < thresholds["throughput_threshold"] * throughput_limit
     memory_ok = memory is not None and memory < thresholds["memory_threshold"] * mem_limit_gb * 1024 * 1024 * 1024  # bytes
     cpu_ok = cpu is not None and cpu < thresholds["cpu_threshold"] * 100
     latency_ok = latency is None or latency < thresholds["latency_threshold_ms"]
+    payload_size_ok = payload_size is None or payload_size < thresholds.get("payload_size_threshold_kb", 1024) * 1024  # Convert KB to bytes
 
     result = {
         "subscription_id": cluster,
@@ -158,14 +232,16 @@ def check_database_metrics_prometheus(cluster_label, db, thresholds):
             "memory": memory,
             "memory_limit_bytes": mem_limit_gb * 1024 * 1024 * 1024,
             "cpu": cpu,
-            "latency_ms": latency
+            "latency_ms": latency,
+            "payload_size_bytes": payload_size
         },
         "thresholds": thresholds,
         "status": {
             "throughput_ok": throughput_ok,
             "memory_ok": memory_ok,
             "cpu_ok": cpu_ok,
-            "latency_ok": latency_ok
+            "latency_ok": latency_ok,
+            "payload_size_ok": payload_size_ok
         }
     }
     return result
@@ -182,13 +258,15 @@ def get_metrics_for_db(cluster_label, db, thresholds, subscription_name, period)
         "memory": None,
         "memory_limit_bytes": mem_limit_gb * 1024 * 1024 * 1024,
         "cpu": None,
-        "latency_ms": None
+        "latency_ms": None,
+        "payload_size_bytes": None
     }
     # Calculate status (all will be None, so all will be False)
     throughput_ok = False
     memory_ok = False
     cpu_ok = False
     latency_ok = False
+    payload_size_ok = False
     # Calculate max scaling limits based on number of shards
     clustering = db.get("clustering", {})
     num_shards = clustering.get("numberOfShards", 1)
@@ -206,14 +284,123 @@ def get_metrics_for_db(cluster_label, db, thresholds, subscription_name, period)
             "throughput_ok": throughput_ok,
             "memory_ok": memory_ok,
             "cpu_ok": cpu_ok,
-            "latency_ok": latency_ok
+            "latency_ok": latency_ok,
+            "payload_size_ok": payload_size_ok
         },
         "max_scaling": {
             "memory_gb": max_memory_gb,
             "throughput_ops": max_throughput
-        }
+        },
+        "downscale_memory_mb": None,
+        "downscale_throughput_ops": None,
+        "downscale_price_suggestion": None
     }
     return result
+
+def nice_memory_step(usage_bytes):
+    """
+    Calculate a nice memory step that leaves headroom below the threshold.
+    Ensures current usage is comfortably below 80% of the suggested limit.
+    """
+    mb = usage_bytes / (1024 * 1024)
+    threshold = 0.8  # 80% threshold
+    
+    # Calculate the minimum memory needed to keep usage below threshold
+    min_memory_needed = mb / threshold
+    
+    # Apply nice rounding with headroom
+    if min_memory_needed <= 100:
+        suggested = 100
+    elif min_memory_needed <= 500:
+        suggested = 500
+    elif min_memory_needed <= 1024:
+        suggested = 1024
+    else:
+        # Round up to next GB
+        suggested = int((min_memory_needed + 1023) // 1024) * 1024
+    
+    # Verify headroom: usage should be below threshold
+    if mb / suggested >= threshold:
+        # If still too close to threshold, go to next step
+        if suggested <= 100:
+            suggested = 500
+        elif suggested <= 500:
+            suggested = 1024
+        elif suggested <= 1024:
+            suggested = 2048
+        else:
+            # After 1GB, always jump by at least 1GB
+            suggested += 1024
+    
+    return suggested
+
+def nice_throughput_step(usage_ops):
+    """
+    Calculate a nice throughput step that leaves headroom below the threshold.
+    Ensures current usage is comfortably below 80% of the suggested limit.
+    """
+    threshold = 0.8  # 80% threshold
+    
+    # Calculate the minimum throughput needed to keep usage below threshold
+    min_throughput_needed = usage_ops / threshold
+    
+    # Apply nice rounding with headroom
+    if min_throughput_needed <= 100:
+        suggested = 100
+    elif min_throughput_needed <= 500:
+        suggested = 500
+    elif min_throughput_needed <= 1000:
+        suggested = 1000
+    else:
+        # Round up to next 1K
+        suggested = int((min_throughput_needed + 999) // 1000) * 1000
+    
+    # Verify headroom: usage should be below threshold
+    if usage_ops / suggested >= threshold:
+        # If still too close to threshold, go to next step
+        if suggested <= 100:
+            suggested = 500
+        elif suggested <= 500:
+            suggested = 1000
+        elif suggested <= 1000:
+            suggested = 2000
+        else:
+            # After 1K, always jump by at least 1K
+            suggested += 1000
+    
+    return suggested
+
+def get_best_downscale_price(region, cloud, memory_mb, throughput_ops, ha_enabled):
+    shard_types = get_shard_types()
+    pricings = get_shard_type_pricings()
+    best = None
+    for st in shard_types:
+        st_id = st.get('id')
+        st_name = st.get('name')
+        st_mem_gb = st.get('memory_size_gb')
+        st_thr = st.get('throughput')
+        st_mem_mb = st_mem_gb * 1024 if st_mem_gb else None  # Convert GB to MB
+        if not st_mem_mb or not st_thr:
+            continue
+        units_needed = max(
+            math.ceil(memory_mb / st_mem_mb),
+            math.ceil(throughput_ops / st_thr)
+        )
+        # Find price for this unit type in the right region/cloud
+        price_entry = next((p for p in pricings if p['shard_type_id'] == st_id and p['region_name'] == region and p['cloud_name'] == cloud), None)
+        if not price_entry:
+            continue
+        price_per_unit = price_entry['price']
+        total_price = price_per_unit * units_needed
+        if ha_enabled:
+            total_price *= 2
+        if best is None or total_price < best['price']:
+            best = {
+                'price': round(total_price, 4),
+                'unit_type': st_name,
+                'units_needed': units_needed
+            }
+    return best
 
 def get_all_metrics(period=None):
     prom_period = period if period else '5m'
@@ -223,7 +410,8 @@ def get_all_metrics(period=None):
         "throughput_threshold": THROUGHPUT_THRESHOLD,
         "memory_threshold": MEMORY_THRESHOLD,
         "cpu_threshold": CPU_THRESHOLD,
-        "latency_threshold_ms": LATENCY_THRESHOLD_MS
+        "latency_threshold_ms": LATENCY_THRESHOLD_MS,
+        "payload_size_threshold_kb": PAYLOAD_SIZE_THRESHOLD_KB
     }
     results = []
     for sub in subscriptions:
@@ -231,6 +419,9 @@ def get_all_metrics(period=None):
         sub_name = sub.get("name")
         deployment_type = sub.get("deploymentType", "")
         databases = get_databases_for_subscription_cached(sub_id)
+        # Use subscriptionPricing if present
+        subscription_pricing = sub.get("subscriptionPricing", [])
+        pricing_list = subscription_pricing if subscription_pricing else get_pricing_for_subscription(sub_id)
         if not databases:
             continue
         for db in databases:
@@ -260,11 +451,30 @@ def get_all_metrics(period=None):
                 memory = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_used_memory{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label)
                 cpu = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_shard_cpu_user_max{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label)
                 latency = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_avg_latency_max{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label)
+                
+                # Calculate payload size for UI metrics (max over time)
+                payload_size = None
+                ingress_bytes_max = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_ingress_bytes_max{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label)
+                egress_bytes_max = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_egress_bytes_max{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label)
+                throughput_max = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_total_req_max{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label)
+                if ingress_bytes_max is not None and egress_bytes_max is not None and throughput_max is not None and throughput_max > 0:
+                    total_bytes_max = ingress_bytes_max + egress_bytes_max
+                    payload_size = total_bytes_max / throughput_max  # bytes per request (max)
+                
                 # Metrics for autoscaling (period_for_autoscale)
                 throughput_autoscale = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_total_req_max{{{labels}}}[{period_for_autoscale}])', bdb=bdb, cluster=cluster_label)
                 memory_autoscale = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_used_memory{{{labels}}}[{period_for_autoscale}])', bdb=bdb, cluster=cluster_label)
                 cpu_autoscale = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_shard_cpu_user_max{{{labels}}}[{period_for_autoscale}])', bdb=bdb, cluster=cluster_label)
                 latency_autoscale = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_avg_latency_max{{{labels}}}[{period_for_autoscale}])', bdb=bdb, cluster=cluster_label)
+                
+                # Calculate payload size for autoscaling metrics
+                payload_size_autoscale = None
+                if throughput_autoscale is not None and throughput_autoscale > 0:
+                    ingress_bytes_autoscale = query_prometheus(PROM_SERVER_URL, f'bdb_ingress_bytes_max{{{labels}}}', bdb=bdb, cluster=cluster_label)
+                    egress_bytes_autoscale = query_prometheus(PROM_SERVER_URL, f'bdb_egress_bytes_max{{{labels}}}', bdb=bdb, cluster=cluster_label)
+                    if ingress_bytes_autoscale is not None and egress_bytes_autoscale is not None:
+                        total_bytes_autoscale = ingress_bytes_autoscale + egress_bytes_autoscale
+                        payload_size_autoscale = total_bytes_autoscale / throughput_autoscale  # bytes per request
                 metrics_result = {
                     "subscription_id": cluster,
                     "subscription_name": sub_name,
@@ -276,7 +486,8 @@ def get_all_metrics(period=None):
                         "memory": memory,
                         "memory_limit_bytes": mem_limit_gb * 1024 * 1024 * 1024,
                         "cpu": cpu,
-                        "latency_ms": latency
+                        "latency_ms": latency,
+                        "payload_size_bytes": payload_size
                     },
                     "metrics_autoscale": {
                         "throughput": throughput_autoscale,
@@ -284,14 +495,16 @@ def get_all_metrics(period=None):
                         "memory": memory_autoscale,
                         "memory_limit_bytes": mem_limit_gb * 1024 * 1024 * 1024,
                         "cpu": cpu_autoscale,
-                        "latency_ms": latency_autoscale
+                        "latency_ms": latency_autoscale,
+                        "payload_size_bytes": payload_size_autoscale
                     },
                     "thresholds": thresholds,
                     "status": {
                         "throughput_ok": throughput is not None and throughput < thresholds["throughput_threshold"] * throughput_limit,
                         "memory_ok": memory is not None and memory < thresholds["memory_threshold"] * mem_limit_gb * 1024 * 1024 * 1024,
                         "cpu_ok": cpu is not None and cpu < thresholds["cpu_threshold"] * 100,
-                        "latency_ok": latency is None or latency < thresholds["latency_threshold_ms"]
+                        "latency_ok": latency is None or latency < thresholds["latency_threshold_ms"],
+                        "payload_size_ok": payload_size is None or payload_size < thresholds.get("payload_size_threshold_kb", 1024) * 1024
                     }
                 }
                 # Add max_scaling calculation
@@ -304,8 +517,65 @@ def get_all_metrics(period=None):
                     "memory_gb": max_memory_gb,
                     "throughput_ops": max_throughput
                 }
+                # Downscale suggestion logic (use max_over_time for memory and throughput)
+                downscale_memory_mb = None
+                downscale_throughput_ops = None
+                if metrics_result['status']['throughput_ok'] and metrics_result['status']['memory_ok'] and metrics_result['status']['cpu_ok'] and metrics_result['status']['latency_ok'] and metrics_result['status']['payload_size_ok']:
+                    # Use max_over_time for the period for safe downscale
+                    mem_used = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_used_memory{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label) or 0
+                    thr_used = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_total_req_max{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label) or 0
+                    downscale_memory_mb = nice_memory_step(mem_used)
+                    downscale_throughput_ops = nice_throughput_step(thr_used)
+                metrics_result['downscale_memory_mb'] = downscale_memory_mb
+                metrics_result['downscale_throughput_ops'] = downscale_throughput_ops
+                downscale_price_suggestion = None
+                if downscale_memory_mb and downscale_throughput_ops:
+                    region = db.get('region')
+                    # Get cloud provider from subscription cloudDetails
+                    cloud = None
+                    if sub.get('cloudDetails') and len(sub['cloudDetails']) > 0:
+                        cloud = sub['cloudDetails'][0].get('provider')
+                    # Fallback to database provider if not found in subscription
+                    if not cloud:
+                        cloud = db.get('provider') or db.get('cloudProvider') or db.get('cloud')
+                    ha_enabled = db.get('replication', False)
+                    downscale_price_suggestion = get_best_downscale_price(region, cloud, downscale_memory_mb, downscale_throughput_ops, ha_enabled)
+                metrics_result['downscale_price_suggestion'] = downscale_price_suggestion
             except Exception as e:
                 metrics_result = get_metrics_for_db(cluster_label, db, thresholds, sub_name, prom_period)
+            # --- Price mapping logic ---
+            price_hourly = None
+            min_subscription_price = None
+            db_type = db.get("typeDetails") or db.get("type")
+            db_shards = db.get("clustering", {}).get("numberOfShards", 1)
+            # Find matching Shards entry in pricing_list (ignore pricePeriod)
+            price_entry = None
+            for entry in pricing_list:
+                if (
+                    entry.get("type") == "Shards"
+                    and (entry.get("typeDetails") == db_type or not db_type)
+                    and entry.get("quantity") == db_shards
+                ):
+                    price_entry = entry
+                    break
+            # Fallback: use first Shards entry if no exact match
+            if price_entry is None:
+                for entry in pricing_list:
+                    if entry.get("type") == "Shards":
+                        price_entry = entry
+                        break
+            if price_entry:
+                per_unit = price_entry.get("pricePerUnit")
+                quantity = price_entry.get("quantity", db_shards)
+                if per_unit is not None:
+                    price_hourly = quantity * per_unit
+            # Find MinimumPrice entry in pricing_list (ignore pricePeriod)
+            for entry in pricing_list:
+                if entry.get("type") == "MinimumPrice":
+                    min_subscription_price = entry.get("pricePerUnit")
+                    break
+            metrics_result["price_hourly"] = price_hourly
+            metrics_result["min_subscription_price"] = min_subscription_price
             result = metrics_result
             result["region"] = db.get("region")
             result["active_active"] = False
