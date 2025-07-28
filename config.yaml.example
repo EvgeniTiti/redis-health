@@ -4,7 +4,7 @@ memory_threshold: 0.8      # 80% of memory limit
 cpu_threshold: 0.6         # 60% of CPU
 latency_threshold_ms: 3    # 3 milliseconds
 payload_size_threshold_kb: 3  # 3KB average payload size threshold
-prometheus_server_url: http://localhost:9090/
+prometheus_server_url: http://54.165.20.46:9090/
 prometheus_query_period: 1h
 prometheus_query_interval_seconds: 30
 

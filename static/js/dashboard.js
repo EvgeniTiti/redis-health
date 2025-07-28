@@ -1,8 +1,10 @@
 // Global variables
 let isLoading = false;
+let isAutoRefreshing = false;
 let autoscaleEnabled = {};
 let autoscaleStatus = {};
 let customThresholds = null;
+let countdownInterval = null;
 let defaultThresholds = {
     throughput: 0.8,
     memory: 0.8,
@@ -241,19 +243,28 @@ function showNotification(message, type = 'info') {
     }, 3000);
 }
 
-function setLoadingState(loading) {
+function setLoadingState(loading, isAutoRefresh = false) {
     isLoading = loading;
+    isAutoRefreshing = isAutoRefresh;
     const container = document.querySelector('.metrics-container');
-    const refreshBtn = document.getElementById('refresh-btn'); // Use ID, not class!
+    const refreshBtn = document.getElementById('refresh-btn');
     
     if (loading) {
-        container.classList.add('loading');
-        if (refreshBtn) {
-            refreshBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
-            refreshBtn.disabled = true;
+        if (isAutoRefresh) {
+            // Subtle loading for auto-refresh
+            container.classList.add('auto-refresh-loading');
+            // Show a subtle notification
+            showAutoRefreshNotification();
+        } else {
+            // Full loading for manual refresh
+            container.classList.add('loading');
+            if (refreshBtn) {
+                refreshBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+                refreshBtn.disabled = true;
+            }
         }
     } else {
-        container.classList.remove('loading');
+        container.classList.remove('loading', 'auto-refresh-loading');
         if (refreshBtn) {
             refreshBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
             refreshBtn.disabled = false;
@@ -261,10 +272,116 @@ function setLoadingState(loading) {
     }
 }
 
+function showAutoRefreshNotification() {
+    // Create a subtle notification for auto-refresh
+    const notification = document.createElement('div');
+    notification.className = 'auto-refresh-notification';
+    notification.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Updating data...';
+    notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: rgba(220, 56, 45, 0.9);
+        color: white;
+        padding: 8px 16px;
+        border-radius: 20px;
+        font-size: 0.875rem;
+        z-index: 1000;
+        opacity: 0;
+        transform: translateX(100%);
+        transition: all 0.3s ease;
+        backdrop-filter: blur(10px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    `;
+    
+    document.body.appendChild(notification);
+    
+    // Animate in
+    setTimeout(() => {
+        notification.style.opacity = '1';
+        notification.style.transform = 'translateX(0)';
+    }, 100);
+    
+    // Remove after 2 seconds
+    setTimeout(() => {
+        notification.style.opacity = '0';
+        notification.style.transform = 'translateX(100%)';
+        setTimeout(() => notification.remove(), 300);
+    }, 2000);
+}
+
+function showLoadingProgress() {
+    // Show a progress indicator for initial load
+    const progressContainer = document.createElement('div');
+    progressContainer.id = 'loading-progress';
+    progressContainer.innerHTML = `
+        <div class="loading-progress-content">
+            <div class="loading-spinner"></div>
+            <div class="loading-text">
+                <h3>Loading Database Metrics</h3>
+                <p>Fetching data from Redis Cloud and Prometheus...</p>
+                <div class="loading-steps">
+                    <div class="step active">Connecting to APIs</div>
+                    <div class="step">Fetching database list</div>
+                    <div class="step">Collecting metrics</div>
+                    <div class="step">Processing data</div>
+                </div>
+            </div>
+        </div>
+    `;
+    progressContainer.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(10px);
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: inherit;
+    `;
+    
+    document.body.appendChild(progressContainer);
+    
+    // Animate steps
+    const steps = progressContainer.querySelectorAll('.step');
+    let currentStep = 0;
+    
+    const animateSteps = () => {
+        if (currentStep < steps.length) {
+            steps[currentStep].classList.add('completed');
+            currentStep++;
+            setTimeout(animateSteps, 800);
+        }
+    };
+    
+    setTimeout(animateSteps, 500);
+    
+    return progressContainer;
+}
+
+function hideLoadingProgress() {
+    const progressContainer = document.getElementById('loading-progress');
+    if (progressContainer) {
+        progressContainer.style.opacity = '0';
+        setTimeout(() => progressContainer.remove(), 300);
+    }
+}
+
 // Main data loading function
-async function loadData() {
+async function loadData(isAutoRefresh = false) {
     if (isLoading) return;
-    setLoadingState(true);
+    
+    // Show loading progress for initial load
+    let progressContainer = null;
+    if (!isAutoRefresh && !window.dataLoaded) {
+        progressContainer = showLoadingProgress();
+    }
+    
+    setLoadingState(true, isAutoRefresh);
     try {
         // Get time range selection
         let period = document.getElementById('time-range-select')?.value || '5m';
@@ -404,6 +521,17 @@ async function loadData() {
         // Update last updated timestamp
         updateLastUpdated();
         
+        // Mark as loaded and hide progress
+        window.dataLoaded = true;
+        if (progressContainer) {
+            hideLoadingProgress();
+        }
+        
+        // Start countdown for next auto-refresh if enabled
+        if (window.autoRefreshInterval) {
+            startCountdown(30); // 30 seconds
+        }
+        
         // Add event listeners to autoscale checkboxes
         document.querySelectorAll('.autoscale-checkbox').forEach(cb => {
             cb.addEventListener('change', async function() {
@@ -414,7 +542,9 @@ async function loadData() {
     } catch (error) {
         setLoadingState(false);
         console.error('Failed to load data:', error);
-        showNotification('Failed to load metrics data', 'error');
+        if (!isAutoRefresh) {
+            showNotification('Failed to load metrics data', 'error');
+        }
         const errorColspan = 10;
         document.querySelector('#metricsTable tbody').innerHTML = `
             <tr>
@@ -504,6 +634,43 @@ function updateLastUpdated() {
     document.getElementById('last-updated').textContent = `Last updated: ${dateString} ${timeString}`;
 }
 
+function startCountdown(seconds) {
+    // Clear existing countdown
+    if (countdownInterval) {
+        clearInterval(countdownInterval);
+    }
+    
+    const countdownElement = document.getElementById('countdown');
+    const nextRefreshElement = document.getElementById('next-refresh');
+    
+    if (!countdownElement || !nextRefreshElement) return;
+    
+    let timeLeft = seconds;
+    nextRefreshElement.style.display = 'inline';
+    
+    countdownInterval = setInterval(() => {
+        timeLeft--;
+        countdownElement.textContent = `${timeLeft}s`;
+        
+        if (timeLeft <= 0) {
+            clearInterval(countdownInterval);
+            countdownInterval = null;
+            nextRefreshElement.style.display = 'none';
+        }
+    }, 1000);
+}
+
+function stopCountdown() {
+    if (countdownInterval) {
+        clearInterval(countdownInterval);
+        countdownInterval = null;
+    }
+    const nextRefreshElement = document.getElementById('next-refresh');
+    if (nextRefreshElement) {
+        nextRefreshElement.style.display = 'none';
+    }
+}
+
 // Initialize dashboard
 document.addEventListener('DOMContentLoaded', async function() {
     setupThresholdControls(); // Only once on page load
@@ -523,10 +690,13 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Load initial data
     loadData();
     
-    // Auto-refresh using config interval
-    window.autoRefreshInterval = setInterval(loadData, prometheusInterval);
-    
-    // Add manual cloud refresh button
+                    // Auto-refresh using config interval with improved UX
+        window.autoRefreshInterval = setInterval(() => loadData(true), prometheusInterval);
+        
+        // Start initial countdown
+        startCountdown(30);
+        
+        // Add manual cloud refresh button
     const controlPanel = document.querySelector('.control-panel');
     if (controlPanel) {
         const refreshCloudBtn = document.createElement('button');

@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 import re
 from datetime import datetime, timedelta
 import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 load_dotenv()
 
@@ -38,6 +39,24 @@ _redis_cache = {
     'databases': {},
     'last_fetch': None
 }
+
+# --- Session for HTTP requests ---
+_session = None
+
+def get_session():
+    global _session
+    if _session is None:
+        _session = requests.Session()
+        # Configure session for better performance
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=20,
+            pool_maxsize=20,
+            max_retries=3,
+            pool_block=False
+        )
+        _session.mount('http://', adapter)
+        _session.mount('https://', adapter)
+    return _session
 
 AUTOSCALE_QUERY_PERIOD = config.get('autoscale_query_period', '5m')
 
@@ -146,7 +165,8 @@ def get_subscriptions():
         "x-api-key": API_KEY,
         "x-api-secret-key": API_SECRET
     }
-    response = requests.get(url, headers=headers)
+    session = get_session()
+    response = session.get(url, headers=headers, timeout=30)
     response.raise_for_status()
     data = response.json()
     return data.get("subscriptions", [])
@@ -158,14 +178,16 @@ def get_databases_for_subscription(subscription_id):
         "x-api-key": API_KEY,
         "x-api-secret-key": API_SECRET
     }
-    response = requests.get(url, headers=headers)
+    session = get_session()
+    response = session.get(url, headers=headers, timeout=30)
     response.raise_for_status()
     data = response.json()
     return data.get("subscription", [])[0].get("databases", [])
 
 def query_prometheus(prom_url, promql, bdb=None, cluster=None):
     try:
-        resp = requests.get(f"{prom_url}/api/v1/query", params={"query": promql}, timeout=10)
+        session = get_session()
+        resp = session.get(f"{prom_url}/api/v1/query", params={"query": promql}, timeout=15)
         resp.raise_for_status()
         data = resp.json()
         if data["status"] == "success" and data["data"]["result"]:
@@ -176,6 +198,59 @@ def query_prometheus(prom_url, promql, bdb=None, cluster=None):
             return None  # No matching result found
         else:
             return None
+    except Exception as e:
+        return None
+
+def query_prometheus_batch(prom_url, queries):
+    """
+    Batch query multiple Prometheus metrics at once
+    queries: list of tuples (promql, bdb, cluster, metric_name)
+    returns: dict of {metric_name: value}
+    """
+    results = {}
+    session = get_session()
+    
+    # Create all requests
+    requests_data = []
+    for promql, bdb, cluster, metric_name in queries:
+        requests_data.append({
+            'url': f"{prom_url}/api/v1/query",
+            'params': {"query": promql},
+            'metric_name': metric_name,
+            'bdb': bdb,
+            'cluster': cluster
+        })
+    
+    # Execute requests in parallel using ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_request = {
+            executor.submit(_execute_prometheus_query, session, req): req 
+            for req in requests_data
+        }
+        
+        for future in as_completed(future_to_request):
+            request = future_to_request[future]
+            try:
+                result = future.result()
+                results[request['metric_name']] = result
+            except Exception as e:
+                results[request['metric_name']] = None
+    
+    return results
+
+def _execute_prometheus_query(session, request):
+    """Helper function to execute a single Prometheus query"""
+    try:
+        resp = session.get(request['url'], params=request['params'], timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        if data["status"] == "success" and data["data"]["result"]:
+            for result in data["data"]["result"]:
+                metric = result.get("metric", {})
+                if (request['bdb'] is None or metric.get("bdb") == request['bdb']) and \
+                   (request['cluster'] is None or metric.get("cluster") == request['cluster']):
+                    return float(result["value"][1])
+        return None
     except Exception as e:
         return None
 
@@ -414,140 +489,198 @@ def get_all_metrics(period=None):
         "payload_size_threshold_kb": PAYLOAD_SIZE_THRESHOLD_KB
     }
     results = []
+    
+    # Collect all databases first
+    all_databases = []
     for sub in subscriptions:
         sub_id = sub.get("id")
         sub_name = sub.get("name")
-        deployment_type = sub.get("deploymentType", "")
         databases = get_databases_for_subscription_cached(sub_id)
-        # Use subscriptionPricing if present
-        subscription_pricing = sub.get("subscriptionPricing", [])
-        pricing_list = subscription_pricing if subscription_pricing else get_pricing_for_subscription(sub_id)
         if not databases:
             continue
         for db in databases:
             if db.get("activeActiveRedis") and db.get("crdbDatabases"):
                 continue
-            db0 = db
-            cluster_label = db0.get("cluster", None)
-            if not cluster_label:
-                private_endpoint = db0.get("privateEndpoint", "")
-                if ".internal." in private_endpoint:
-                    cluster_label = private_endpoint.split(".internal.", 1)[1].split(":")[0]
-                else:
-                    cluster_label = ""
-            import copy
-            metrics_result = {}
-            try:
-                bdb = str(db.get("databaseId"))
-                cluster = db.get("subscriptionId")
-                mem_limit_gb = db.get("memoryLimitInGb", 0)
-                throughput_limit = db.get("throughputMeasurement", {}).get("value", 0)
-                # Use prom_period for UI metrics, autoscale_period for autoscaling
-                period_for_metrics = prom_period
-                period_for_autoscale = autoscale_period
-                labels = f'cluster="{cluster_label}",bdb="{bdb}"'
-                # Metrics for UI (period_for_metrics)
-                throughput = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_total_req_max{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label)
-                memory = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_used_memory{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label)
-                cpu = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_shard_cpu_user_max{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label)
-                latency = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_avg_latency_max{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label)
-                
-                # Calculate payload size for UI metrics (max over time)
-                payload_size = None
-                ingress_bytes_max = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_ingress_bytes_max{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label)
-                egress_bytes_max = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_egress_bytes_max{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label)
-                throughput_max = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_total_req_max{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label)
-                if ingress_bytes_max is not None and egress_bytes_max is not None and throughput_max is not None and throughput_max > 0:
-                    total_bytes_max = ingress_bytes_max + egress_bytes_max
-                    payload_size = total_bytes_max / throughput_max  # bytes per request (max)
-                
-                # Metrics for autoscaling (period_for_autoscale)
-                throughput_autoscale = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_total_req_max{{{labels}}}[{period_for_autoscale}])', bdb=bdb, cluster=cluster_label)
-                memory_autoscale = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_used_memory{{{labels}}}[{period_for_autoscale}])', bdb=bdb, cluster=cluster_label)
-                cpu_autoscale = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_shard_cpu_user_max{{{labels}}}[{period_for_autoscale}])', bdb=bdb, cluster=cluster_label)
-                latency_autoscale = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_avg_latency_max{{{labels}}}[{period_for_autoscale}])', bdb=bdb, cluster=cluster_label)
-                
-                # Calculate payload size for autoscaling metrics
-                payload_size_autoscale = None
-                if throughput_autoscale is not None and throughput_autoscale > 0:
-                    ingress_bytes_autoscale = query_prometheus(PROM_SERVER_URL, f'bdb_ingress_bytes_max{{{labels}}}', bdb=bdb, cluster=cluster_label)
-                    egress_bytes_autoscale = query_prometheus(PROM_SERVER_URL, f'bdb_egress_bytes_max{{{labels}}}', bdb=bdb, cluster=cluster_label)
-                    if ingress_bytes_autoscale is not None and egress_bytes_autoscale is not None:
-                        total_bytes_autoscale = ingress_bytes_autoscale + egress_bytes_autoscale
-                        payload_size_autoscale = total_bytes_autoscale / throughput_autoscale  # bytes per request
-                metrics_result = {
-                    "subscription_id": cluster,
-                    "subscription_name": sub_name,
-                    "database_id": bdb,
-                    "database_name": db.get("name"),
-                    "metrics": {
-                        "throughput": throughput,
-                        "throughput_limit": throughput_limit,
-                        "memory": memory,
-                        "memory_limit_bytes": mem_limit_gb * 1024 * 1024 * 1024,
-                        "cpu": cpu,
-                        "latency_ms": latency,
-                        "payload_size_bytes": payload_size
-                    },
-                    "metrics_autoscale": {
-                        "throughput": throughput_autoscale,
-                        "throughput_limit": throughput_limit,
-                        "memory": memory_autoscale,
-                        "memory_limit_bytes": mem_limit_gb * 1024 * 1024 * 1024,
-                        "cpu": cpu_autoscale,
-                        "latency_ms": latency_autoscale,
-                        "payload_size_bytes": payload_size_autoscale
-                    },
-                    "thresholds": thresholds,
-                    "status": {
-                        "throughput_ok": throughput is not None and throughput < thresholds["throughput_threshold"] * throughput_limit,
-                        "memory_ok": memory is not None and memory < thresholds["memory_threshold"] * mem_limit_gb * 1024 * 1024 * 1024,
-                        "cpu_ok": cpu is not None and cpu < thresholds["cpu_threshold"] * 100,
-                        "latency_ok": latency is None or latency < thresholds["latency_threshold_ms"],
-                        "payload_size_ok": payload_size is None or payload_size < thresholds.get("payload_size_threshold_kb", 1024) * 1024
-                    }
+            all_databases.append((sub, db))
+    
+    # Batch collect all Prometheus queries
+    all_queries = []
+    db_query_map = {}  # Map to track which queries belong to which database
+    
+    for sub, db in all_databases:
+        sub_id = sub.get("id")
+        sub_name = sub.get("name")
+        db0 = db
+        cluster_label = db0.get("cluster", None)
+        if not cluster_label:
+            private_endpoint = db0.get("privateEndpoint", "")
+            if ".internal." in private_endpoint:
+                cluster_label = private_endpoint.split(".internal.", 1)[1].split(":")[0]
+            else:
+                cluster_label = ""
+        
+        bdb = str(db.get("databaseId"))
+        cluster = db.get("subscriptionId")
+        labels = f'cluster="{cluster_label}",bdb="{bdb}"'
+        
+        # Create unique identifier for this database
+        db_key = f"{sub_id}_{bdb}"
+        db_query_map[db_key] = {
+            'sub': sub,
+            'db': db,
+            'cluster_label': cluster_label,
+            'bdb': bdb,
+            'cluster': cluster,
+            'sub_name': sub_name
+        }
+        
+        # Add all queries for this database
+        queries = [
+            # UI metrics (period_for_metrics)
+            (f'max_over_time(bdb_total_req_max{{{labels}}}[{prom_period}])', bdb, cluster_label, f'{db_key}_throughput'),
+            (f'max_over_time(bdb_used_memory{{{labels}}}[{prom_period}])', bdb, cluster_label, f'{db_key}_memory'),
+            (f'max_over_time(bdb_shard_cpu_user_max{{{labels}}}[{prom_period}])', bdb, cluster_label, f'{db_key}_cpu'),
+            (f'max_over_time(bdb_avg_latency_max{{{labels}}}[{prom_period}])', bdb, cluster_label, f'{db_key}_latency'),
+            (f'max_over_time(bdb_ingress_bytes_max{{{labels}}}[{prom_period}])', bdb, cluster_label, f'{db_key}_ingress_bytes_max'),
+            (f'max_over_time(bdb_egress_bytes_max{{{labels}}}[{prom_period}])', bdb, cluster_label, f'{db_key}_egress_bytes_max'),
+            (f'max_over_time(bdb_total_req_max{{{labels}}}[{prom_period}])', bdb, cluster_label, f'{db_key}_throughput_max'),
+            
+            # Autoscaling metrics (period_for_autoscale)
+            (f'max_over_time(bdb_total_req_max{{{labels}}}[{autoscale_period}])', bdb, cluster_label, f'{db_key}_throughput_autoscale'),
+            (f'max_over_time(bdb_used_memory{{{labels}}}[{autoscale_period}])', bdb, cluster_label, f'{db_key}_memory_autoscale'),
+            (f'max_over_time(bdb_shard_cpu_user_max{{{labels}}}[{autoscale_period}])', bdb, cluster_label, f'{db_key}_cpu_autoscale'),
+            (f'max_over_time(bdb_avg_latency_max{{{labels}}}[{autoscale_period}])', bdb, cluster_label, f'{db_key}_latency_autoscale'),
+            (f'bdb_ingress_bytes_max{{{labels}}}', bdb, cluster_label, f'{db_key}_ingress_bytes_autoscale'),
+            (f'bdb_egress_bytes_max{{{labels}}}', bdb, cluster_label, f'{db_key}_egress_bytes_autoscale'),
+        ]
+        all_queries.extend(queries)
+    
+    # Execute all queries in parallel
+    batch_results = query_prometheus_batch(PROM_SERVER_URL, all_queries)
+    
+    # Process results for each database
+    for db_key, db_info in db_query_map.items():
+        sub = db_info['sub']
+        db = db_info['db']
+        cluster_label = db_info['cluster_label']
+        bdb = db_info['bdb']
+        cluster = db_info['cluster']
+        sub_name = db_info['sub_name']
+        
+        # Extract metrics from batch results
+        throughput = batch_results.get(f'{db_key}_throughput')
+        memory = batch_results.get(f'{db_key}_memory')
+        cpu = batch_results.get(f'{db_key}_cpu')
+        latency = batch_results.get(f'{db_key}_latency')
+        ingress_bytes_max = batch_results.get(f'{db_key}_ingress_bytes_max')
+        egress_bytes_max = batch_results.get(f'{db_key}_egress_bytes_max')
+        throughput_max = batch_results.get(f'{db_key}_throughput_max')
+        
+        # Autoscaling metrics
+        throughput_autoscale = batch_results.get(f'{db_key}_throughput_autoscale')
+        memory_autoscale = batch_results.get(f'{db_key}_memory_autoscale')
+        cpu_autoscale = batch_results.get(f'{db_key}_cpu_autoscale')
+        latency_autoscale = batch_results.get(f'{db_key}_latency_autoscale')
+        ingress_bytes_autoscale = batch_results.get(f'{db_key}_ingress_bytes_autoscale')
+        egress_bytes_autoscale = batch_results.get(f'{db_key}_egress_bytes_autoscale')
+        
+        # Calculate payload sizes
+        payload_size = None
+        if ingress_bytes_max is not None and egress_bytes_max is not None and throughput_max is not None and throughput_max > 0:
+            total_bytes_max = ingress_bytes_max + egress_bytes_max
+            payload_size = total_bytes_max / throughput_max
+        
+        payload_size_autoscale = None
+        if throughput_autoscale is not None and throughput_autoscale > 0:
+            if ingress_bytes_autoscale is not None and egress_bytes_autoscale is not None:
+                total_bytes_autoscale = ingress_bytes_autoscale + egress_bytes_autoscale
+                payload_size_autoscale = total_bytes_autoscale / throughput_autoscale
+        
+        # Get database configuration
+        mem_limit_gb = db.get("memoryLimitInGb", 0)
+        throughput_limit = db.get("throughputMeasurement", {}).get("value", 0)
+        
+        # Use subscriptionPricing if present
+        subscription_pricing = sub.get("subscriptionPricing", [])
+        pricing_list = subscription_pricing if subscription_pricing else get_pricing_for_subscription(cluster)
+        
+        try:
+            metrics_result = {
+                "subscription_id": cluster,
+                "subscription_name": sub_name,
+                "database_id": bdb,
+                "database_name": db.get("name"),
+                "metrics": {
+                    "throughput": throughput,
+                    "throughput_limit": throughput_limit,
+                    "memory": memory,
+                    "memory_limit_bytes": mem_limit_gb * 1024 * 1024 * 1024,
+                    "cpu": cpu,
+                    "latency_ms": latency,
+                    "payload_size_bytes": payload_size
+                },
+                "metrics_autoscale": {
+                    "throughput": throughput_autoscale,
+                    "throughput_limit": throughput_limit,
+                    "memory": memory_autoscale,
+                    "memory_limit_bytes": mem_limit_gb * 1024 * 1024 * 1024,
+                    "cpu": cpu_autoscale,
+                    "latency_ms": latency_autoscale,
+                    "payload_size_bytes": payload_size_autoscale
+                },
+                "thresholds": thresholds,
+                "status": {
+                    "throughput_ok": throughput is not None and throughput < thresholds["throughput_threshold"] * throughput_limit,
+                    "memory_ok": memory is not None and memory < thresholds["memory_threshold"] * mem_limit_gb * 1024 * 1024 * 1024,
+                    "cpu_ok": cpu is not None and cpu < thresholds["cpu_threshold"] * 100,
+                    "latency_ok": latency is None or latency < thresholds["latency_threshold_ms"],
+                    "payload_size_ok": payload_size is None or payload_size < thresholds.get("payload_size_threshold_kb", 1024) * 1024
                 }
-                # Add max_scaling calculation
-                clustering = db.get("clustering", {})
-                num_shards = clustering.get("numberOfShards", 1)
-                replication = db.get("replication", False)
-                max_throughput = num_shards * 25000  # 25K ops/sec per shard
-                max_memory_gb = num_shards * 25 * (2 if replication else 1)  # 25GB per shard, doubled if replication
-                metrics_result["max_scaling"] = {
-                    "memory_gb": max_memory_gb,
-                    "throughput_ops": max_throughput
-                }
-                # Downscale suggestion logic (use max_over_time for memory and throughput)
-                downscale_memory_mb = None
-                downscale_throughput_ops = None
-                if metrics_result['status']['throughput_ok'] and metrics_result['status']['memory_ok'] and metrics_result['status']['cpu_ok'] and metrics_result['status']['latency_ok'] and metrics_result['status']['payload_size_ok']:
-                    # Use max_over_time for the period for safe downscale
-                    mem_used = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_used_memory{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label) or 0
-                    thr_used = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_total_req_max{{{labels}}}[{period_for_metrics}])', bdb=bdb, cluster=cluster_label) or 0
-                    downscale_memory_mb = nice_memory_step(mem_used)
-                    downscale_throughput_ops = nice_throughput_step(thr_used)
-                metrics_result['downscale_memory_mb'] = downscale_memory_mb
-                metrics_result['downscale_throughput_ops'] = downscale_throughput_ops
-                downscale_price_suggestion = None
-                if downscale_memory_mb and downscale_throughput_ops:
-                    region = db.get('region')
-                    # Get cloud provider from subscription cloudDetails
-                    cloud = None
-                    if sub.get('cloudDetails') and len(sub['cloudDetails']) > 0:
-                        cloud = sub['cloudDetails'][0].get('provider')
-                    # Fallback to database provider if not found in subscription
-                    if not cloud:
-                        cloud = db.get('provider') or db.get('cloudProvider') or db.get('cloud')
-                    ha_enabled = db.get('replication', False)
-                    downscale_price_suggestion = get_best_downscale_price(region, cloud, downscale_memory_mb, downscale_throughput_ops, ha_enabled)
-                metrics_result['downscale_price_suggestion'] = downscale_price_suggestion
-            except Exception as e:
-                metrics_result = get_metrics_for_db(cluster_label, db, thresholds, sub_name, prom_period)
+            }
+            
+            # Add max_scaling calculation
+            clustering = db.get("clustering", {})
+            num_shards = clustering.get("numberOfShards", 1)
+            replication = db.get("replication", False)
+            max_throughput = num_shards * 25000  # 25K ops/sec per shard
+            max_memory_gb = num_shards * 25 * (2 if replication else 1)  # 25GB per shard, doubled if replication
+            metrics_result["max_scaling"] = {
+                "memory_gb": max_memory_gb,
+                "throughput_ops": max_throughput
+            }
+            
+            # Downscale suggestion logic (use max_over_time for memory and throughput)
+            downscale_memory_mb = None
+            downscale_throughput_ops = None
+            if metrics_result['status']['throughput_ok'] and metrics_result['status']['memory_ok'] and metrics_result['status']['cpu_ok'] and metrics_result['status']['latency_ok'] and metrics_result['status']['payload_size_ok']:
+                # Use max_over_time for the period for safe downscale
+                mem_used = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_used_memory{{{labels}}}[{prom_period}])', bdb=bdb, cluster=cluster_label) or 0
+                thr_used = query_prometheus(PROM_SERVER_URL, f'max_over_time(bdb_total_req_max{{{labels}}}[{prom_period}])', bdb=bdb, cluster=cluster_label) or 0
+                downscale_memory_mb = nice_memory_step(mem_used)
+                downscale_throughput_ops = nice_throughput_step(thr_used)
+            metrics_result['downscale_memory_mb'] = downscale_memory_mb
+            metrics_result['downscale_throughput_ops'] = downscale_throughput_ops
+            
+            downscale_price_suggestion = None
+            if downscale_memory_mb and downscale_throughput_ops:
+                region = db.get('region')
+                # Get cloud provider from subscription cloudDetails
+                cloud = None
+                if sub.get('cloudDetails') and len(sub['cloudDetails']) > 0:
+                    cloud = sub['cloudDetails'][0].get('provider')
+                # Fallback to database provider if not found in subscription
+                if not cloud:
+                    cloud = db.get('provider') or db.get('cloudProvider') or db.get('cloud')
+                ha_enabled = db.get('replication', False)
+                downscale_price_suggestion = get_best_downscale_price(region, cloud, downscale_memory_mb, downscale_throughput_ops, ha_enabled)
+            metrics_result['downscale_price_suggestion'] = downscale_price_suggestion
+            
             # --- Price mapping logic ---
             price_hourly = None
             min_subscription_price = None
             db_type = db.get("typeDetails") or db.get("type")
             db_shards = db.get("clustering", {}).get("numberOfShards", 1)
+            
             # Find matching Shards entry in pricing_list (ignore pricePeriod)
             price_entry = None
             for entry in pricing_list:
@@ -558,22 +691,26 @@ def get_all_metrics(period=None):
                 ):
                     price_entry = entry
                     break
+            
             # Fallback: use first Shards entry if no exact match
             if price_entry is None:
                 for entry in pricing_list:
                     if entry.get("type") == "Shards":
                         price_entry = entry
                         break
+            
             if price_entry:
                 per_unit = price_entry.get("pricePerUnit")
                 quantity = price_entry.get("quantity", db_shards)
                 if per_unit is not None:
                     price_hourly = quantity * per_unit
+            
             # Find MinimumPrice entry in pricing_list (ignore pricePeriod)
             for entry in pricing_list:
                 if entry.get("type") == "MinimumPrice":
                     min_subscription_price = entry.get("pricePerUnit")
                     break
+            
             metrics_result["price_hourly"] = price_hourly
             metrics_result["min_subscription_price"] = min_subscription_price
             result = metrics_result
@@ -582,6 +719,10 @@ def get_all_metrics(period=None):
             result["subscription_id"] = sub_id
             result["db_status"] = db.get("status")
             results.append(result)
+            
+        except Exception as e:
+            metrics_result = get_metrics_for_db(cluster_label, db, thresholds, sub_name, prom_period)
+            results.append(metrics_result)
     return {"databases": results}
 
 if __name__ == '__main__':

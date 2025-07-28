@@ -58,6 +58,9 @@
             <div class="control-group">
                 <span id="last-updated">Last updated: Never</span>
             </div>
+            <div class="control-group">
+                <span id="next-refresh" style="display: none;">Next refresh: <span id="countdown">30s</span></span>
+            </div>
         </div>
 
         <!-- Absolute Time Range -->
@@ -175,17 +178,22 @@
         function toggleAutoRefresh() {
             const btn = document.getElementById('auto-refresh-btn');
             const icon = btn.querySelector('i');
-            const text = btn.textContent;
             
             if (window.autoRefreshInterval) {
                 clearInterval(window.autoRefreshInterval);
                 window.autoRefreshInterval = null;
+                stopCountdown();
                 icon.className = 'fas fa-play';
                 btn.innerHTML = '<i class="fas fa-play"></i> Auto Refresh';
+                showNotification('Auto-refresh stopped', 'info');
             } else {
-                window.autoRefreshInterval = setInterval(loadData, 30000);
+                // Get the configured interval
+                const prometheusInterval = 30000; // Default 30 seconds
+                window.autoRefreshInterval = setInterval(() => loadData(true), prometheusInterval);
+                startCountdown(30);
                 icon.className = 'fas fa-pause';
                 btn.innerHTML = '<i class="fas fa-pause"></i> Stop Auto Refresh';
+                showNotification('Auto-refresh enabled (30s interval)', 'success');
             }
         }
 
